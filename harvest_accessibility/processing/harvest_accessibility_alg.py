@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
@@ -5,6 +8,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterNumber,
     QgsProcessingException,
+    QgsProcessingOutputHtml,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsFeature,
@@ -26,6 +30,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
     P2_OUT = "P2_OUT"
     ROUTE_OUT = "ROUTE_OUT"
     SUMMARY_OUT = "SUMMARY_OUT"
+    HTML_OUT = "HTML_OUT"
 
     def name(self):
         return "harvest_accessibility"
@@ -83,6 +88,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.SUMMARY_OUT, "Output summary (means)", type=QgsProcessing.TypeVector
         ))
+        self.addOutput(QgsProcessingOutputHtml(self.HTML_OUT, "Result report"))
 
     def processAlgorithm(self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback):
         poly = self.parameterAsSource(parameters, self.POLY, context)
@@ -355,6 +361,42 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     fatalError=False
                 )
 
+            # HTML result report
+            def fmt(val, unit="m"):
+                return f"{val:.1f} {unit}" if val is not None else "N/A"
+
+            html_path = os.path.join(tempfile.gettempdir(), "harvest_accessibility_result.html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  body {{ font-family: sans-serif; margin: 2em; color: #333; }}
+  h2 {{ color: #2e6b2e; }}
+  table {{ border-collapse: collapse; margin-top: 1em; }}
+  td {{ padding: 0.5em 1.2em 0.5em 0; }}
+  .val {{ font-size: 1.6em; font-weight: bold; color: #2e6b2e; }}
+  .label {{ color: #555; font-size: 0.9em; }}
+  .note {{ color: #888; font-size: 0.85em; margin-top: 1.5em; }}
+</style>
+</head>
+<body>
+<h2>Harvest Accessibility — Result</h2>
+<table>
+  <tr>
+    <td><span class="label">平均木寄せ距離 (d1)</span><br>
+        <span class="val">{fmt(d1_mean)}</span></td>
+    <td><span class="label">平均運材距離 (d2)</span><br>
+        <span class="val">{fmt(d2_mean)}</span></td>
+  </tr>
+</table>
+<p class="note">
+  サンプル点数: {total} 点 ／ d2 未到達: {null_d2} 点
+  {"<br><b style='color:#c00'>⚠ 全点が土場に到達できませんでした。林道の接続とスナップ許容誤差を確認してください。</b>" if d2_mean is None else ""}
+</p>
+</body>
+</html>""")
+
             summary_fields = QgsFields()
             summary_fields.append(QgsField("n_points", QVariant.Int))
             summary_fields.append(QgsField("n_d2_null", QVariant.Int))
@@ -396,7 +438,13 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 else f"Done. d1_mean={d1_mean}, d2_mean={d2_mean}, points={total}, d2_null={null_d2}"
             )
 
-            return {self.P1_OUT: p1_id, self.P2_OUT: p2_id, self.ROUTE_OUT: route_id, self.SUMMARY_OUT: summary_id}
+            return {
+                self.P1_OUT: p1_id,
+                self.P2_OUT: p2_id,
+                self.ROUTE_OUT: route_id,
+                self.SUMMARY_OUT: summary_id,
+                self.HTML_OUT: html_path,
+            }
 
         except QgsProcessingException:
             raise

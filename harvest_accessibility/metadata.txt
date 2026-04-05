@@ -12,5 +12,6 @@ homepage=https://github.com/hoshicurrey/harvest-accessibility
 tags=forestry,extraction distance,network analysis,processing,road network,skidding,hauling
 icon=icon.png
 hasProcessingProvider=yes
+qgisMaximumVersion=4.99
 experimental=False
 deprecated=False

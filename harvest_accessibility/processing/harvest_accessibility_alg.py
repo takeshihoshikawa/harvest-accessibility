@@ -5,8 +5,9 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingParameterFeatureSource,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterNumber,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterDefinition,
     QgsProcessingException,
     QgsProcessingOutputHtml,
     QgsProcessingContext,
@@ -14,9 +15,10 @@ from qgis.core import (
     QgsFeature,
     QgsFields,
     QgsField,
+    QgsUnitTypes,
     QgsWkbTypes
 )
-from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtCore import QCoreApplication, QVariant
 from qgis import processing
 
 
@@ -26,32 +28,35 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
     LANDING = "LANDING"
     GRID = "GRID"
     SNAP_TOL = "SNAP_TOL"
-    P1_OUT = "P1_OUT"
-    P2_OUT = "P2_OUT"
-    ROUTE_OUT = "ROUTE_OUT"
-    SUMMARY_OUT = "SUMMARY_OUT"
     HTML_OUT = "HTML_OUT"
+    DEBUG = "DEBUG"
+    SPLIT_ROADS = "SPLIT_ROADS"
+
+    def tr(self, string):
+        return QCoreApplication.translate("HarvestAccessibilityAlg", string)
 
     def name(self):
         return "harvest_accessibility"
 
     def displayName(self):
-        return "Harvest Accessibility (d1 straight to road + d2 network to nearest landing)"
+        return self.tr("Harvest Accessibility")
 
     def group(self):
-        return "Harvest Accessibility"
+        return self.tr("Harvest Accessibility")
 
     def groupId(self):
         return "harvest_accessibility"
 
     def shortHelpString(self):
-        return (
-            "Inputs: operation polygon, forest road lines (also used as network), landing points (multiple OK).\n"
+        return self.tr(
+            "Inputs: operation polygon, forest road lines (also used as network), "
+            "landing points (multiple OK).\n"
             "1) Create grid points within polygon (p1)\n"
             "2) Shortest straight line to road -> d1, endpoint on road -> p2\n"
             "3) Shortest path on road network from p2 to the nearest landing -> d2 (NULL if unreachable)\n"
-            "4) Output p2 and summary means.\n"
-            "NOTE: Use a projected CRS in metres."
+            "4) HTML result report.\n"
+            "NOTE: Use a projected CRS in metres.\n\n"
+            "Advanced: enable debug mode to load intermediate layers into the project."
         )
 
     def createInstance(self):
@@ -59,36 +64,51 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.POLY, "Operation area polygon", [QgsProcessing.TypeVectorPolygon]
+            self.POLY,
+            self.tr("Operation area polygon"),
+            [QgsProcessing.TypeVectorPolygon]
         ))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.ROADS, "Forest road lines (also network)", [QgsProcessing.TypeVectorLine]
+            self.ROADS,
+            self.tr("Forest road lines (also network)"),
+            [QgsProcessing.TypeVectorLine]
         ))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.LANDING, "Landing points (multiple OK)", [QgsProcessing.TypeVectorPoint]
+            self.LANDING,
+            self.tr("Landing points (multiple OK)"),
+            [QgsProcessing.TypeVectorPoint]
         ))
         self.addParameter(QgsProcessingParameterNumber(
-            self.GRID, "Grid spacing (m)", QgsProcessingParameterNumber.Double, defaultValue=4.0, minValue=0.1
+            self.GRID,
+            self.tr("Grid spacing (m)"),
+            QgsProcessingParameterNumber.Double,
+            defaultValue=4.0,
+            minValue=0.1
         ))
         self.addParameter(QgsProcessingParameterNumber(
-            self.SNAP_TOL, "Network snapping tolerance (m)", QgsProcessingParameterNumber.Double, defaultValue=5.0, minValue=0.0
+            self.SNAP_TOL,
+            self.tr("Network snapping tolerance (m)"),
+            QgsProcessingParameterNumber.Double,
+            defaultValue=5.0,
+            minValue=0.0
+        ))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.SPLIT_ROADS,
+            self.tr("Split roads at intersections before routing"),
+            defaultValue=True
         ))
 
-        # IMPORTANT: Explicit sink types to avoid geometry mismatch in QGIS 3.44+
-        self.addParameter(QgsProcessingParameterFeatureSink(
-            self.P1_OUT, "Output p1 (grid points)", type=QgsProcessing.TypeVectorPoint
-        ))
-        self.addParameter(QgsProcessingParameterFeatureSink(
-            self.P2_OUT, "Output p2 (road snap points with d1, d2)", type=QgsProcessing.TypeVectorPoint
-        ))
-        self.addParameter(QgsProcessingParameterFeatureSink(
-            self.ROUTE_OUT, "Output routes (p2 to nearest landing)", type=QgsProcessing.TypeVectorLine
-        ))
-        # Summary is a table (no geometry). Use TypeVectorAnyGeometry but write NoGeometry.
-        self.addParameter(QgsProcessingParameterFeatureSink(
-            self.SUMMARY_OUT, "Output summary (means)", type=QgsProcessing.TypeVector
-        ))
-        self.addOutput(QgsProcessingOutputHtml(self.HTML_OUT, "Result report"))
+        self.addOutput(QgsProcessingOutputHtml(self.HTML_OUT, self.tr("Result report")))
+
+        debug_param = QgsProcessingParameterBoolean(
+            self.DEBUG,
+            self.tr("Debug mode (add intermediate layers to project)"),
+            defaultValue=False
+        )
+        debug_param.setFlags(
+            debug_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced
+        )
+        self.addParameter(debug_param)
 
     def processAlgorithm(self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback):
         poly = self.parameterAsSource(parameters, self.POLY, context)
@@ -96,24 +116,46 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         landing = self.parameterAsSource(parameters, self.LANDING, context)
         grid = float(self.parameterAsDouble(parameters, self.GRID, context))
         snap_tol = float(self.parameterAsDouble(parameters, self.SNAP_TOL, context))
+        split_roads = self.parameterAsBool(parameters, self.SPLIT_ROADS, context)
+        debug = self.parameterAsBool(parameters, self.DEBUG, context)
 
         if poly is None or roads is None or landing is None:
-            raise QgsProcessingException("Invalid input layers.")
+            raise QgsProcessingException(self.tr("Invalid input layers."))
 
         if poly.featureCount() == 0:
-            raise QgsProcessingException("Operation area polygon has no features.")
+            raise QgsProcessingException(self.tr("Operation area polygon has no features."))
         if roads.featureCount() == 0:
-            raise QgsProcessingException("Forest roads layer has no features.")
+            raise QgsProcessingException(self.tr("Forest roads layer has no features."))
 
         crs = poly.sourceCrs()
         if crs.isGeographic():
-            raise QgsProcessingException(
+            raise QgsProcessingException(self.tr(
                 "Polygon CRS is geographic (degrees). Reproject to a projected CRS in metres."
-            )
+            ))
+
+        if crs.mapUnits() != QgsUnitTypes.DistanceMeters:
+            unit_name = QgsUnitTypes.encodeUnit(crs.mapUnits())
+            raise QgsProcessingException(self.tr(
+                "Polygon CRS unit is '{}', not metres. "
+                "Grid spacing and distances will be incorrect. Reproject to a metric CRS."
+            ).format(unit_name))
+
+        roads_crs = roads.sourceCrs()
+        landing_crs = landing.sourceCrs()
+        if roads_crs != crs:
+            raise QgsProcessingException(self.tr(
+                "Road layer CRS ({}) differs from polygon CRS ({}). "
+                "Reproject all layers to the same CRS."
+            ).format(roads_crs.authid(), crs.authid()))
+        if landing_crs != crs:
+            raise QgsProcessingException(self.tr(
+                "Landing layer CRS ({}) differs from polygon CRS ({}). "
+                "Reproject all layers to the same CRS."
+            ).format(landing_crs.authid(), crs.authid()))
 
         try:
             # 1) Create grid points and clip to polygon
-            feedback.pushInfo("1) Creating grid points (p1)...")
+            feedback.pushInfo(self.tr("1) Creating grid points (p1)..."))
             grid_layer = processing.run(
                 "native:creategrid",
                 {
@@ -140,6 +182,12 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 context=context, feedback=feedback
             )["OUTPUT"]
 
+            if p1.featureCount() == 0:
+                raise QgsProcessingException(self.tr(
+                    "No grid points fall within the operation polygon. "
+                    "Try a smaller grid spacing."
+                ))
+
             p1 = processing.run(
                 "native:fieldcalculator",
                 {
@@ -155,7 +203,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             )["OUTPUT"]
 
             # 2) Shortest line to roads -> d1, nearest point on road -> p2
-            feedback.pushInfo("2) Computing shortest lines to roads (d1) and nearest points (p2)...")
+            feedback.pushInfo(self.tr("2) Computing shortest lines to roads (d1) and nearest points (p2)..."))
             shortest_lines = processing.run(
                 "native:shortestline",
                 {
@@ -196,16 +244,32 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             # NOTE: QGIS 'native:shortestpathpointtolayer' expects a SINGLE START_POINT (coordinate),
             # so for multiple start points we use 'native:shortestpathlayertopoint' and run it
             # for each landing, then take the minimum cost per start point.
-            feedback.pushInfo("3) Computing shortest path along road network to nearest landing (d2)...")
+            feedback.pushInfo(self.tr("3) Computing shortest path along road network to nearest landing (d2)..."))
 
             landing_layer = self.parameterAsLayer(parameters, self.LANDING, context)
             if landing_layer.featureCount() == 0:
-                raise QgsProcessingException("Landing layer has no features.")
+                raise QgsProcessingException(self.tr("Landing layer has no features."))
+
+            roads_layer = self.parameterAsLayer(parameters, self.ROADS, context)
+            if split_roads:
+                feedback.pushInfo(self.tr("3a) Splitting roads at intersections..."))
+                roads_layer = processing.run(
+                    "native:splitwithlines",
+                    {
+                        "INPUT": roads_layer,
+                        "LINES": roads_layer,
+                        "OUTPUT": "memory:"
+                    },
+                    context=context, feedback=feedback
+                )["OUTPUT"]
+                feedback.pushInfo(self.tr("    -> {} segments after split.").format(roads_layer.featureCount()))
 
             routes_list = []
             authid = crs.authid()
 
             for lf in landing_layer.getFeatures():
+                if feedback.isCanceled():
+                    raise QgsProcessingException(self.tr("Processing cancelled by user."))
                 geom = lf.geometry()
                 if geom is None or geom.isEmpty():
                     continue
@@ -215,7 +279,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 out = processing.run(
                     "native:shortestpathlayertopoint",
                     {
-                        "INPUT": self.parameterAsLayer(parameters, self.ROADS, context),
+                        "INPUT": roads_layer,
                         "START_POINTS": p2,
                         "END_POINT": end_point,
                         "STRATEGY": 0,  # shortest distance
@@ -228,7 +292,6 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 )
 
                 r = out["OUTPUT"]
-                # Record which landing was routed to (useful for inspection)
                 r = processing.run(
                     "native:fieldcalculator",
                     {
@@ -246,22 +309,21 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 routes_list.append(r)
 
             if not routes_list:
-                raise QgsProcessingException("No valid landing points were found (all geometries empty?).")
+                raise QgsProcessingException(self.tr(
+                    "No valid landing points were found (all geometries empty?)."
+                ))
 
-            # Merge all route candidates (one set per landing)
             merged_routes = processing.run(
                 "native:mergevectorlayers",
                 {"LAYERS": routes_list, "CRS": crs, "OUTPUT": "memory:"},
                 context=context, feedback=feedback
             )["OUTPUT"]
 
-            # Use 'cost' field if present, otherwise fall back to geometry length
             cost_field = "cost" if merged_routes.fields().indexFromName("cost") != -1 else None
             if cost_field is None:
-                feedback.pushInfo(
-                    "Note: routing output has no 'cost' field; using geometry length ($length) for d2. "
-                    "This is expected for distance-based routing."
-                )
+                feedback.pushInfo(self.tr(
+                    "Note: routing output has no 'cost' field; using geometry length for d2."
+                ))
             routes = processing.run(
                 "native:fieldcalculator",
                 {
@@ -277,16 +339,23 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             )["OUTPUT"]
 
             if routes.fields().indexFromName("tree_id") == -1:
-                raise QgsProcessingException(
+                raise QgsProcessingException(self.tr(
                     "Routing output has no 'tree_id' field. Ensure p2 has 'tree_id' attribute."
-                )
+                ))
 
-            # Drop features with NULL d2 (unroutable start points)
             routes = processing.run(
                 "native:extractbyexpression",
                 {"INPUT": routes, "EXPRESSION": "\"d2\" IS NOT NULL", "OUTPUT": "memory:"},
                 context=context, feedback=feedback
             )["OUTPUT"]
+
+            if routes.featureCount() == 0:
+                raise QgsProcessingException(self.tr(
+                    "All grid points are unreachable from all landings. "
+                    "Check that the road network is connected, "
+                    "landing points are on or near the road, "
+                    "and the snapping tolerance is sufficient."
+                ))
 
             stats = processing.run(
                 "qgis:statisticsbycategories",
@@ -300,9 +369,8 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             )["OUTPUT"]
 
             if stats.fields().indexFromName("min") == -1:
-                raise QgsProcessingException("Unexpected statistics output (no 'min' field).")
+                raise QgsProcessingException(self.tr("Unexpected statistics output (no 'min' field)."))
 
-            # Join minimum d2 back to p2
             p2_tmp = processing.run(
                 "native:joinattributestable",
                 {
@@ -319,7 +387,6 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 context=context, feedback=feedback
             )["OUTPUT"]
 
-            # Rename 'min' -> 'd2'
             p2_with = processing.run(
                 "native:fieldcalculator",
                 {
@@ -335,7 +402,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             )["OUTPUT"]
 
             # 4) Summary statistics
-            feedback.pushInfo("4) Computing summary statistics...")
+            feedback.pushInfo(self.tr("4) Computing summary statistics..."))
             d1_vals, d2_vals = [], []
             null_d2 = 0
             total = 0
@@ -355,17 +422,18 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             d2_mean = (sum(d2_vals) / len(d2_vals)) if d2_vals else None
 
             if d2_mean is None:
-                feedback.reportError(
+                feedback.reportError(self.tr(
                     "WARNING: d2_mean is None — no grid points could be routed to any landing. "
-                    "Check that the road network is connected and the snapping tolerance is sufficient.",
-                    fatalError=False
-                )
+                    "Check that the road network is connected and the snapping tolerance is sufficient."
+                ), fatalError=False)
 
-            # HTML result report
             def fmt(val, unit="m"):
                 return f"{val:.1f} {unit}" if val is not None else "N/A"
 
-            html_path = os.path.join(tempfile.gettempdir(), "harvest_accessibility_result.html")
+            html_path = os.path.join(
+                tempfile.gettempdir(),
+                f"harvest_accessibility_{os.getpid()}.html"
+            )
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(f"""<!DOCTYPE html>
 <html>
@@ -397,40 +465,6 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 </body>
 </html>""")
 
-            summary_fields = QgsFields()
-            summary_fields.append(QgsField("n_points", QVariant.Int))
-            summary_fields.append(QgsField("n_d2_null", QVariant.Int))
-            summary_fields.append(QgsField("d1_mean", QVariant.Double))
-            summary_fields.append(QgsField("d2_mean", QVariant.Double))
-
-            (summary_sink, summary_id) = self.parameterAsSink(
-                parameters, self.SUMMARY_OUT, context, summary_fields, QgsWkbTypes.NoGeometry, crs
-            )
-            sf = QgsFeature(summary_fields)
-            sf["n_points"] = total
-            sf["n_d2_null"] = null_d2
-            sf["d1_mean"] = d1_mean
-            sf["d2_mean"] = d2_mean
-            summary_sink.addFeature(sf)
-
-            (p1_sink, p1_id) = self.parameterAsSink(
-                parameters, self.P1_OUT, context, p1.fields(), QgsWkbTypes.Point, crs
-            )
-            for f in p1.getFeatures():
-                p1_sink.addFeature(f)
-
-            (p2_sink, p2_id) = self.parameterAsSink(
-                parameters, self.P2_OUT, context, p2_with.fields(), QgsWkbTypes.Point, crs
-            )
-            for f in p2_with.getFeatures():
-                p2_sink.addFeature(f)
-
-            (route_sink, route_id) = self.parameterAsSink(
-                parameters, self.ROUTE_OUT, context, routes.fields(), QgsWkbTypes.LineString, crs
-            )
-            for f in routes.getFeatures():
-                route_sink.addFeature(f)
-
             feedback.pushInfo(
                 f"Done. d1_mean={d1_mean:.3f}m, d2_mean={d2_mean:.3f}m, "
                 f"points={total}, d2_null={null_d2}"
@@ -438,15 +472,43 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 else f"Done. d1_mean={d1_mean}, d2_mean={d2_mean}, points={total}, d2_null={null_d2}"
             )
 
-            return {
-                self.P1_OUT: p1_id,
-                self.P2_OUT: p2_id,
-                self.ROUTE_OUT: route_id,
-                self.SUMMARY_OUT: summary_id,
-                self.HTML_OUT: html_path,
-            }
+            if debug:
+                project = context.project()
+                if project is not None:
+                    for layer, name in [
+                        (p1,      "debug_p1_grid"),
+                        (p2_with, "debug_p2_road_snap"),
+                        (routes,  "debug_routes"),
+                    ]:
+                        context.addLayerToLoadOnCompletion(
+                            layer.id(),
+                            QgsProcessingContext.LayerDetails(name, project)
+                        )
+
+                    summary_fields = QgsFields()
+                    summary_fields.append(QgsField("n_points", QVariant.Int))
+                    summary_fields.append(QgsField("n_d2_null", QVariant.Int))
+                    summary_fields.append(QgsField("d1_mean", QVariant.Double))
+                    summary_fields.append(QgsField("d2_mean", QVariant.Double))
+                    from qgis.core import QgsVectorLayer, QgsProject
+                    summary_layer = QgsVectorLayer("NoGeometry", "debug_summary", "memory")
+                    summary_layer.dataProvider().addAttributes(summary_fields.toList())
+                    summary_layer.updateFields()
+                    sf = QgsFeature(summary_layer.fields())
+                    sf["n_points"] = total
+                    sf["n_d2_null"] = null_d2
+                    sf["d1_mean"] = d1_mean
+                    sf["d2_mean"] = d2_mean
+                    summary_layer.dataProvider().addFeatures([sf])
+                    QgsProject.instance().addMapLayer(summary_layer)
+                else:
+                    feedback.pushInfo(self.tr("Debug: no project context, skipping layer output."))
+
+            return {self.HTML_OUT: html_path}
 
         except QgsProcessingException:
             raise
         except Exception as e:
-            raise QgsProcessingException(f"Unexpected error during processing: {e}") from e
+            raise QgsProcessingException(
+                self.tr("Unexpected error during processing: {}").format(e)
+            ) from e

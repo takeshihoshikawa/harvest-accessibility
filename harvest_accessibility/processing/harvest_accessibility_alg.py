@@ -302,8 +302,12 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             (self.OUT_STEMS, self.tr("Felled stems (butt to top)"),
              QgsProcessing.TypeVectorLine),
         ):
+            # createByDefault: the layers appear as temporary layers without
+            # anyone filling anything in, and the destination field is still
+            # there for saving them to a file.
             param = QgsProcessingParameterFeatureSink(
-                sink, label, gtype, optional=True, createByDefault=False
+                sink, label, gtype, defaultValue="TEMPORARY_OUTPUT",
+                optional=True, createByDefault=True
             )
             self.addParameter(param)
 
@@ -365,11 +369,6 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         model on -- the stem that was felled and the line along which it is
         pulled.
         """
-        want = {key: parameters.get(key) for key in
-                (self.OUT_TREES, self.OUT_HAULING, self.OUT_STEMS)}
-        if not any(want.values()):
-            return
-
         bases = {f["tree_id"]: f.geometry().asPoint() for f in p1.getFeatures()}
         rows = {}
         for f in p2_with.getFeatures():
@@ -399,21 +398,25 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             line_fields.append(QgsField("stem_len", QVariant.Double))
             line_fields.append(QgsField("grab_tip", QVariant.Int))
 
-        trees_sink = hauling_sink = stems_sink = None
-        trees_id = hauling_id = stems_id = None
-        if want[self.OUT_TREES]:
-            trees_sink, trees_id = self.parameterAsSink(
-                parameters, self.OUT_TREES, context, tree_fields,
-                QgsWkbTypes.Point, crs)
-        if want[self.OUT_HAULING]:
-            hauling_sink, hauling_id = self.parameterAsSink(
-                parameters, self.OUT_HAULING, context, line_fields,
-                QgsWkbTypes.LineString, crs)
-        if want[self.OUT_STEMS] and modelled:
-            stems_sink, stems_id = self.parameterAsSink(
-                parameters, self.OUT_STEMS, context, line_fields,
-                QgsWkbTypes.LineString, crs)
-        elif want[self.OUT_STEMS]:
+        def make_sink(name, fields, wkb_type):
+            # An unchecked optional sink has no destination; that is a choice,
+            # not an error.
+            try:
+                sink, dest = self.parameterAsSink(
+                    parameters, name, context, fields, wkb_type, crs)
+            except Exception:
+                return None, None
+            return sink, dest
+
+        trees_sink, trees_id = make_sink(self.OUT_TREES, tree_fields,
+                                         QgsWkbTypes.Point)
+        hauling_sink, hauling_id = make_sink(self.OUT_HAULING, line_fields,
+                                             QgsWkbTypes.LineString)
+        stems_sink = stems_id = None
+        if modelled:
+            stems_sink, stems_id = make_sink(self.OUT_STEMS, line_fields,
+                                             QgsWkbTypes.LineString)
+        else:
             feedback.pushInfo(self.tr(
                 "Felled stems need the felling model; supply a DEM (or choose a "
                 "download source) to get them."
@@ -483,6 +486,12 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         for dest_id in (trees_id, hauling_id, stems_id):
             if dest_id:
                 self._style_by_d1(dest_id, context)
+
+        return {key: dest for key, dest in (
+            (self.OUT_TREES, trees_id),
+            (self.OUT_HAULING, hauling_id),
+            (self.OUT_STEMS, stems_id),
+        ) if dest}
 
     @staticmethod
     def _style_by_d1(dest_id, context):
@@ -1095,7 +1104,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 context=context, feedback=feedback
             )["OUTPUT"])
 
-            self._write_result_layers(
+            layer_outputs = self._write_result_layers(
                 parameters, context, feedback, p1, p2_with, crs,
                 modelled=(dem_layer is not None)
             )
@@ -1247,7 +1256,9 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 else:
                     feedback.pushInfo(self.tr("Debug: no project context, skipping layer output."))
 
-            return {self.HTML_OUT: html_path}
+            results = {self.HTML_OUT: html_path}
+            results.update(layer_outputs)
+            return results
 
         except QgsProcessingException:
             raise

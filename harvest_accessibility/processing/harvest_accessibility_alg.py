@@ -219,6 +219,18 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         split_roads = self.parameterAsBool(parameters, self.SPLIT_ROADS, context)
         debug = self.parameterAsBool(parameters, self.DEBUG, context)
 
+        # Felling model inputs.  Each feature turns itself on by being supplied.
+        dem_layer = self.parameterAsRasterLayer(parameters, self.DEM, context)
+        trees_source = self.parameterAsSource(parameters, self.TREES, context)
+        height_field = self.parameterAsString(parameters, self.HEIGHT_FIELD, context)
+        barriers_source = self.parameterAsSource(parameters, self.BARRIERS, context)
+        tree_height = float(self.parameterAsDouble(parameters, self.TREE_HEIGHT, context))
+        fell_sector = float(self.parameterAsDouble(parameters, self.FELL_SECTOR, context))
+        flat_slope = float(self.parameterAsDouble(parameters, self.FLAT_SLOPE, context))
+        grapple_reach = float(self.parameterAsDouble(parameters, self.GRAPPLE_REACH, context))
+        aspect_smooth = float(self.parameterAsDouble(parameters, self.ASPECT_SMOOTH, context))
+        road_candidates = int(self.parameterAsInt(parameters, self.ROAD_CANDIDATES, context))
+
         if poly is None or roads is None or landing is None:
             raise QgsProcessingException(self.tr("Invalid input layers."))
 
@@ -263,26 +275,38 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 return lyr
 
             # 1) Create grid points and clip to polygon
-            feedback.pushInfo(self.tr("1) Creating grid points (p1)..."))
-            grid_layer = _reg(processing.run(
+            if trees_source is not None:
+                # Individual tree points stand in for the grid: extraction distance
+                # is a per-tree quantity, so real stem positions beat a regular
+                # lattice.  Grid spacing has no meaning here -- say so rather than
+                # letting it look like it was applied.
+                feedback.pushInfo(self.tr(
+                    "1) Using supplied tree points as sample points (p1); "
+                    "grid spacing is ignored."
+                ))
+                sample_input = parameters[self.TREES]
+            else:
+                feedback.pushInfo(self.tr("1) Creating grid points (p1)..."))
+                sample_input = _reg(processing.run(
                 "native:creategrid",
-                {
-                    "TYPE": 0,  # point
-                    "EXTENT": poly.sourceExtent(),
-                    "HSPACING": grid,
-                    "VSPACING": grid,
-                    "HOVERLAY": 0,
-                    "VOVERLAY": 0,
-                    "CRS": crs,
-                    "OUTPUT": "memory:"
-                },
-                context=context, feedback=feedback
-            )["OUTPUT"])
+                    {
+                        "TYPE": 0,  # point
+                        "EXTENT": poly.sourceExtent(),
+                        "HSPACING": grid,
+                        "VSPACING": grid,
+                        "HOVERLAY": 0,
+                        "VOVERLAY": 0,
+                        "CRS": crs,
+                        "OUTPUT": "memory:"
+                    },
+                    context=context, feedback=feedback
+                )["OUTPUT"]).id()
 
+            # Both sources get clipped to the operation area the same way.
             p1 = _reg(processing.run(
                 "native:extractbylocation",
                 {
-                    "INPUT": grid_layer.id(),
+                    "INPUT": sample_input,
                     "PREDICATE": [0],  # intersects
                     "INTERSECT": parameters[self.POLY],
                     "OUTPUT": "memory:"
@@ -292,8 +316,9 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
             if p1.featureCount() == 0:
                 raise QgsProcessingException(self.tr(
-                    "No grid points fall within the operation polygon. "
-                    "Try a smaller grid spacing."
+                    "No sample points fall within the operation polygon. "
+                    "With a grid, try a smaller spacing; with tree points, check "
+                    "that they overlap the operation area."
                 ))
 
             p1 = _reg(processing.run(

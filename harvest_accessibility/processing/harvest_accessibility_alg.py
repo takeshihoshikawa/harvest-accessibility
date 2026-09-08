@@ -5,6 +5,8 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterField,
     QgsProcessingParameterNumber,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterDefinition,
@@ -31,6 +33,17 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
     HTML_OUT = "HTML_OUT"
     DEBUG = "DEBUG"
     SPLIT_ROADS = "SPLIT_ROADS"
+    # Felling model (all optional; absent inputs keep the plain geometric behaviour)
+    DEM = "DEM"
+    TREES = "TREES"
+    HEIGHT_FIELD = "HEIGHT_FIELD"
+    TREE_HEIGHT = "TREE_HEIGHT"
+    BARRIERS = "BARRIERS"
+    FELL_SECTOR = "FELL_SECTOR"
+    FLAT_SLOPE = "FLAT_SLOPE"
+    GRAPPLE_REACH = "GRAPPLE_REACH"
+    ASPECT_SMOOTH = "ASPECT_SMOOTH"
+    ROAD_CANDIDATES = "ROAD_CANDIDATES"
 
     def tr(self, string):
         return QCoreApplication.translate("HarvestAccessibilityAlg", string)
@@ -78,6 +91,49 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             self.tr("Landing points (multiple OK)"),
             [QgsProcessing.TypeVectorPoint]
         ))
+        # --- Felling model inputs (optional) -----------------------------
+        # The model switches on by the presence of its inputs: no DEM means the
+        # plain geometric d1, no barrier layer means no barrier filtering.
+        dem = QgsProcessingParameterRasterLayer(
+            self.DEM,
+            self.tr("DEM (enables the felling model)"),
+            optional=True
+        )
+        self.addParameter(dem)
+
+        trees = QgsProcessingParameterFeatureSource(
+            self.TREES,
+            self.tr("Individual tree points (used as sample points instead of the grid)"),
+            [QgsProcessing.TypeVectorPoint],
+            optional=True
+        )
+        self.addParameter(trees)
+
+        height_field = QgsProcessingParameterField(
+            self.HEIGHT_FIELD,
+            self.tr("Tree height field"),
+            parentLayerParameterName=self.TREES,
+            type=QgsProcessingParameterField.Numeric,
+            optional=True
+        )
+        self.addParameter(height_field)
+
+        barriers = QgsProcessingParameterFeatureSource(
+            self.BARRIERS,
+            self.tr("Barriers (rivers etc.; lines or polygons)"),
+            [QgsProcessing.TypeVectorLine, QgsProcessing.TypeVectorPolygon],
+            optional=True
+        )
+        self.addParameter(barriers)
+
+        self.addParameter(QgsProcessingParameterNumber(
+            self.TREE_HEIGHT,
+            self.tr("Tree height (m), used when no height field is given"),
+            QgsProcessingParameterNumber.Double,
+            defaultValue=20.0,
+            minValue=0.0
+        ))
+
         self.addParameter(QgsProcessingParameterNumber(
             self.GRID,
             self.tr("Grid spacing (m)"),
@@ -92,11 +148,16 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             defaultValue=5.0,
             minValue=0.0
         ))
-        self.addParameter(QgsProcessingParameterBoolean(
+        split_param = QgsProcessingParameterBoolean(
             self.SPLIT_ROADS,
             self.tr("Split roads at intersections before routing"),
             defaultValue=True
-        ))
+        )
+        # Default on, and turning it off only breaks turning at junctions.
+        split_param.setFlags(
+            split_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced
+        )
+        self.addParameter(split_param)
 
         self.addOutput(QgsProcessingOutputHtml(self.HTML_OUT, self.tr("Result report")))
 
@@ -109,6 +170,45 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             debug_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced
         )
         self.addParameter(debug_param)
+
+        # Calibration values for the felling model.  These are method constants
+        # rather than per-site inputs, so they live behind the advanced flag --
+        # but they must stay adjustable: the result is sensitive to the sector
+        # half-angle in particular.
+        for param in (
+            QgsProcessingParameterNumber(
+                self.FELL_SECTOR,
+                self.tr("Felling sector half-angle from downslope (deg)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=105.0, minValue=0.0, maxValue=180.0
+            ),
+            QgsProcessingParameterNumber(
+                self.FLAT_SLOPE,
+                self.tr("Slope at or below which any direction is allowed (deg)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=15.0, minValue=0.0, maxValue=90.0
+            ),
+            QgsProcessingParameterNumber(
+                self.GRAPPLE_REACH,
+                self.tr("Direct grapple reach from the road (m)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=3.0, minValue=0.0
+            ),
+            QgsProcessingParameterNumber(
+                self.ASPECT_SMOOTH,
+                self.tr("Slope/aspect smoothing window (m)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=5.0, minValue=0.0
+            ),
+            QgsProcessingParameterNumber(
+                self.ROAD_CANDIDATES,
+                self.tr("Number of candidate roads per sample point"),
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=10, minValue=1
+            ),
+        ):
+            param.setFlags(param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+            self.addParameter(param)
 
     def processAlgorithm(self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback):
         poly = self.parameterAsSource(parameters, self.POLY, context)
@@ -485,8 +585,21 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             if debug:
                 project = context.project()
                 if project is not None:
+                    # p1 itself has no d1.  The shortest-line layer carries p1's attributes
+                    # plus d1, so its first vertex is the grid point with d1 attached.
+                    # tree_id keeps it aligned with debug_p2_road_snap.
+                    p1_dbg = _reg(processing.run(
+                        "native:extractspecificvertices",
+                        {
+                            "INPUT": shortest_lines.id(),
+                            "VERTICES": "0",  # first vertex = original grid point
+                            "OUTPUT": "memory:"
+                        },
+                        context=context, feedback=feedback
+                    )["OUTPUT"])
+
                     for layer, name in [
-                        (p1,      "debug_p1_grid"),
+                        (p1_dbg,  "debug_p1_grid"),
                         (p2_with, "debug_p2_road_snap"),
                         (routes,  "debug_routes"),
                     ]:

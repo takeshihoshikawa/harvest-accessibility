@@ -687,9 +687,14 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             if d1_new <= grapple_reach:
                 d1_new = 0.0
             if is_grapple:
-                # Counted as grapple already; do not count it twice because the
-                # stem happens to cross the road it is standing next to.
+                # The machine grabs this tree from the road it is standing next
+                # to, so the haul starts at the nearest point on the road -- not
+                # wherever the felled stem happens to cross it 20 m away.  The
+                # felling direction is still kept, for the stem drawing.
+                d1_new = 0.0
+                p2_geom = foot_geom
                 on_road = 0
+                grab_tip = 0
             n_on_road += on_road
             feats.append(self._p2_feature(out, f, d1_new, d_base, az, reach,
                                           p2_geom, on_road=on_road, blocked=0,

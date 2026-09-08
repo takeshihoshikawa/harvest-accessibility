@@ -1,3 +1,4 @@
+import math
 import os
 import tempfile
 
@@ -18,10 +19,62 @@ from qgis.core import (
     QgsFields,
     QgsField,
     QgsUnitTypes,
-    QgsWkbTypes
+    QgsWkbTypes,
+    QgsGeometry,
+    QgsPointXY,
+    QgsVectorLayer
 )
 from qgis.PyQt.QtCore import QCoreApplication, QVariant
 from qgis import processing
+
+
+def _azimuth(dx, dy):
+    """Azimuth in degrees, clockwise from north."""
+    return math.degrees(math.atan2(dx, dy)) % 360.0
+
+
+def _angle_diff(a, b):
+    """Smallest signed difference a - b, in (-180, 180]."""
+    return (a - b + 180.0) % 360.0 - 180.0
+
+
+def _slope_along(slope_deg, phi_deg):
+    """Ground slope in a direction phi degrees away from steepest descent.
+
+    tan(theta_dir) = tan(theta_max) * cos(phi):  straight downslope keeps the
+    full slope, across-slope (phi = 90) is level.
+    """
+    return math.degrees(math.atan(
+        math.tan(math.radians(slope_deg)) * math.cos(math.radians(phi_deg))
+    ))
+
+
+def _candidate_directions(target_az, aspect_deg, slope_deg, sector, flat_slope):
+    """Felling directions to try, best first.
+
+    On gentle ground any direction is allowed, so aiming at the road is optimal.
+    On steeper ground the direction is clamped into the sector centred on
+    downslope.  The clamp is exact for a straight road; for a curved or branching
+    network it is an approximation -- the direction that truly minimises the
+    distance from the stem's near end to the road need not be the clamped
+    bearing.  Both sector edges are offered as fallbacks so that a barrier can
+    reject the first choice without losing the point.
+    """
+    if slope_deg <= flat_slope or abs(_angle_diff(target_az, aspect_deg)) <= sector:
+        cands = [target_az]
+    else:
+        cands = []
+    edges = [(aspect_deg + sector) % 360.0, (aspect_deg - sector) % 360.0]
+    edges.sort(key=lambda az: abs(_angle_diff(target_az, az)))
+    cands.extend(edges)
+    cands.append(aspect_deg)  # straight downslope: always allowed by the sector
+    seen, out = set(), []
+    for az in cands:
+        key = round(az, 3)
+        if key not in seen:
+            seen.add(key)
+            out.append(az)
+    return out
 
 
 class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
@@ -210,6 +263,187 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             param.setFlags(param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
             self.addParameter(param)
 
+    def _apply_felling_model(self, p1, p2_geom_only, parameters, context, feedback,
+                             _reg, dem_layer, barriers_source, height_field,
+                             tree_height, fell_sector, flat_slope, grapple_reach,
+                             aspect_smooth, crs):
+        """Recompute d1 and p2 from the felled stem rather than the standing tree.
+
+        Returns (p2_layer, stats).  The returned layer keeps the contract the
+        routing step depends on: one feature per sample point, carrying tree_id
+        and d1.  Points are never dropped -- a point with d1 = 0 still needs a
+        route to a landing.
+        """
+        # Slope and aspect are evaluated on a DEM resampled to the smoothing
+        # window.  Reprojecting here is not optional: elevation tiles arrive in
+        # web mercator, where horizontal distances are stretched by 1/cos(lat)
+        # (~22% at 35N) and every slope would come out that much too gentle --
+        # and the model branches on a 15 degree threshold.
+        feedback.pushInfo(self.tr("2b) Preparing slope and aspect for the felling model..."))
+        dem_r = processing.run(
+            "gdal:warpreproject",
+            {
+                "INPUT": dem_layer,
+                "TARGET_CRS": crs,
+                "RESAMPLING": 1,  # bilinear
+                "TARGET_RESOLUTION": aspect_smooth if aspect_smooth > 0 else None,
+                "OUTPUT": "TEMPORARY_OUTPUT"
+            },
+            context=context, feedback=feedback
+        )["OUTPUT"]
+
+        slope_r = processing.run(
+            "native:slope", {"INPUT": dem_r, "Z_FACTOR": 1, "OUTPUT": "TEMPORARY_OUTPUT"},
+            context=context, feedback=feedback
+        )["OUTPUT"]
+        aspect_r = processing.run(
+            "native:aspect", {"INPUT": dem_r, "Z_FACTOR": 1, "OUTPUT": "TEMPORARY_OUTPUT"},
+            context=context, feedback=feedback
+        )["OUTPUT"]
+
+        sampled = _reg(processing.run(
+            "native:rastersampling",
+            {"INPUT": p1.id(), "RASTERCOPY": slope_r, "COLUMN_PREFIX": "slp_",
+             "OUTPUT": "memory:"},
+            context=context, feedback=feedback
+        )["OUTPUT"])
+        sampled = _reg(processing.run(
+            "native:rastersampling",
+            {"INPUT": sampled.id(), "RASTERCOPY": aspect_r, "COLUMN_PREFIX": "asp_",
+             "OUTPUT": "memory:"},
+            context=context, feedback=feedback
+        )["OUTPUT"])
+
+        roads_layer = self.parameterAsLayer(parameters, self.ROADS, context)
+        roads_geom = QgsGeometry.unaryUnion(
+            [f.geometry() for f in roads_layer.getFeatures() if not f.geometry().isEmpty()]
+        )
+        barriers_geom = None
+        if barriers_source is not None:
+            parts = [f.geometry() for f in barriers_source.getFeatures()
+                     if not f.geometry().isEmpty()]
+            if parts:
+                barriers_geom = QgsGeometry.unaryUnion(parts)
+
+        out = QgsVectorLayer("Point?crs=" + crs.authid(), "p2_model", "memory")
+        fields = QgsFields()
+        fields.append(QgsField("tree_id", QVariant.Int))
+        fields.append(QgsField("d1", QVariant.Double))
+        fields.append(QgsField("d1_geom", QVariant.Double))   # geometric d1, for comparison
+        fields.append(QgsField("fell_az", QVariant.Double))
+        fields.append(QgsField("stem_len", QVariant.Double))  # horizontal reach
+        fields.append(QgsField("on_road", QVariant.Int))      # stem reaches the road
+        fields.append(QgsField("blocked", QVariant.Int))      # no direction survived
+        out.dataProvider().addAttributes(fields.toList())
+        out.updateFields()
+
+        n_on_road, n_blocked, n_grapple = 0, 0, 0
+        feats = []
+        for f in sampled.getFeatures():
+            if feedback.isCanceled():
+                raise QgsProcessingException(self.tr("Processing cancelled by user."))
+            base = f.geometry().asPoint()
+            base_geom = QgsGeometry.fromPointXY(base)
+            d_base = base_geom.distance(roads_geom)
+
+            # Within grapple reach nothing is winched at all.
+            if d_base <= grapple_reach:
+                n_grapple += 1
+                foot = roads_geom.nearestPoint(base_geom)
+                feats.append(self._p2_feature(out, f, 0.0, d_base, None, 0.0,
+                                              foot, on_road=0, blocked=0))
+                continue
+
+            slope_deg = f["slp_1"]
+            aspect_deg = f["asp_1"]
+            height = None
+            if height_field:
+                height = f[height_field]
+            if height is None or height <= 0:
+                height = tree_height
+            if slope_deg is None or aspect_deg is None:
+                # Outside the DEM: fall back to the geometric answer rather than
+                # inventing a felling direction.
+                foot = roads_geom.nearestPoint(base_geom)
+                feats.append(self._p2_feature(out, f, d_base, d_base, None, 0.0,
+                                              foot, on_road=0, blocked=1))
+                n_blocked += 1
+                continue
+
+            foot_geom = roads_geom.nearestPoint(base_geom)
+            foot_pt = foot_geom.asPoint()
+            target_az = _azimuth(foot_pt.x() - base.x(), foot_pt.y() - base.y())
+
+            best = None
+            for az in _candidate_directions(target_az, aspect_deg, slope_deg,
+                                            fell_sector, flat_slope):
+                phi = _angle_diff(az, aspect_deg)
+                reach = height * math.cos(math.radians(_slope_along(slope_deg, phi)))
+                tip = QgsPointXY(base.x() + reach * math.sin(math.radians(az)),
+                                 base.y() + reach * math.cos(math.radians(az)))
+                stem = QgsGeometry.fromPolylineXY([base, tip])
+                # A direction whose stem crosses a barrier is not available:
+                # a stem thrown over the river cannot be pulled back across it.
+                if barriers_geom is not None and stem.intersects(barriers_geom):
+                    continue
+                if stem.intersects(roads_geom):
+                    # Blocking the road is accepted, so reaching it ends the haul.
+                    hit = stem.intersection(roads_geom)
+                    p2_geom = hit if hit.wkbType() == QgsWkbTypes.Point \
+                        else QgsGeometry.fromPointXY(
+                            hit.nearestPoint(base_geom).asPoint())
+                    best = (0.0, az, reach, p2_geom, 1)
+                    break
+                tip_geom = QgsGeometry.fromPointXY(tip)
+                d_tip = tip_geom.distance(roads_geom)
+                # Either end can be grabbed, so the near one decides.
+                if d_tip < d_base:
+                    cand = (d_tip, az, reach, roads_geom.nearestPoint(tip_geom), 0)
+                else:
+                    cand = (d_base, az, reach, foot_geom, 0)
+                if best is None or cand[0] < best[0]:
+                    best = cand
+
+            if best is None:
+                # Every direction was blocked: leave the stem standing and use
+                # the plain geometric distance, and count it so the report can
+                # say how often this happened.
+                n_blocked += 1
+                feats.append(self._p2_feature(out, f, d_base, d_base, None, 0.0,
+                                              foot_geom, on_road=0, blocked=1))
+                continue
+
+            d1_new, az, reach, p2_geom, on_road = best
+            if d1_new <= grapple_reach:
+                d1_new = 0.0
+            n_on_road += on_road
+            feats.append(self._p2_feature(out, f, d1_new, d_base, az, reach,
+                                          p2_geom, on_road=on_road, blocked=0))
+
+        out.dataProvider().addFeatures(feats)
+        out.updateExtents()
+        _reg(out)
+        stats = {"on_road": n_on_road, "blocked": n_blocked, "grapple": n_grapple}
+        feedback.pushInfo(self.tr(
+            "    -> stem reaches the road: {} / within grapple reach: {} / "
+            "no felling direction available: {}"
+        ).format(n_on_road, n_grapple, n_blocked))
+        return out, stats
+
+    @staticmethod
+    def _p2_feature(layer, src, d1, d1_geom, az, reach, geom, on_road, blocked):
+        feat = QgsFeature(layer.fields())
+        feat["tree_id"] = src["tree_id"]
+        feat["d1"] = float(d1)
+        feat["d1_geom"] = float(d1_geom)
+        feat["fell_az"] = None if az is None else float(az)
+        feat["stem_len"] = float(reach)
+        feat["on_road"] = int(on_road)
+        feat["blocked"] = int(blocked)
+        feat.setGeometry(geom if isinstance(geom, QgsGeometry)
+                         else QgsGeometry.fromPointXY(geom))
+        return feat
+
     def processAlgorithm(self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback):
         poly = self.parameterAsSource(parameters, self.POLY, context)
         roads = self.parameterAsSource(parameters, self.ROADS, context)
@@ -372,6 +606,28 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 },
                 context=context, feedback=feedback
             )["OUTPUT"])
+
+            # 2b) Felling model.  d1 stops being "distance to the nearest road"
+            # and becomes "distance from the road to the near end of the felled
+            # stem", which also moves p2 -- and p2 is where routing starts.
+            geometric_d1 = None
+            model_stats = None
+            if dem_layer is not None:
+                geometric_d1 = {}
+                for f in p2.getFeatures():
+                    geometric_d1[f["tree_id"]] = f["d1"]
+                p2, model_stats = self._apply_felling_model(
+                    p1, p2, parameters, context, feedback, _reg,
+                    dem_layer=dem_layer,
+                    barriers_source=barriers_source,
+                    height_field=height_field,
+                    tree_height=tree_height,
+                    fell_sector=fell_sector,
+                    flat_slope=flat_slope,
+                    grapple_reach=grapple_reach,
+                    aspect_smooth=aspect_smooth,
+                    crs=crs,
+                )
 
             # 3) Shortest path to nearest landing along road network
             # NOTE: QGIS 'native:shortestpathpointtolayer' expects a SINGLE START_POINT (coordinate),
@@ -543,10 +799,13 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             total = 0
             field_names = p2_with.fields().names()
 
+            d1_geom_vals = []
             for f in p2_with.getFeatures():
                 total += 1
                 if f["d1"] is not None:
                     d1_vals.append(float(f["d1"]))
+                if "d1_geom" in field_names and f["d1_geom"] is not None:
+                    d1_geom_vals.append(float(f["d1_geom"]))
                 d2 = f["d2"] if "d2" in field_names else None
                 if d2 is None:
                     null_d2 += 1
@@ -555,6 +814,10 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
             d1_mean = (sum(d1_vals) / len(d1_vals)) if d1_vals else None
             d2_mean = (sum(d2_vals) / len(d2_vals)) if d2_vals else None
+            # With the model on, the plain geometric d1 is reported next to it:
+            # the drop is the whole point of the model and should be visible in
+            # one run rather than asserted.
+            d1_geom_mean = (sum(d1_geom_vals) / len(d1_geom_vals)) if d1_geom_vals else None
 
             if d2_mean is None:
                 feedback.reportError(self.tr(
@@ -564,6 +827,25 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
             def fmt(val, unit="m"):
                 return f"{val:.1f} {unit}" if val is not None else "N/A"
+
+            # State the assumptions in the report itself.  The model's numbers
+            # only mean something next to the assumptions that produced them.
+            if model_stats is not None:
+                height_note = (f"樹高フィールド {height_field}" if height_field
+                               else f"樹高 {tree_height:.0f} m")
+                model_note = (
+                    "<br><b>伐倒モデル適用</b>"
+                    f"（{height_note}／許容扇形 下方向±{fell_sector:.0f}度／"
+                    f"傾斜{flat_slope:.0f}度以下は全方向／直接把持 {grapple_reach:.0f} m／"
+                    f"斜面方位の評価 {aspect_smooth:.0f} m）"
+                    f"<br>伐倒前の幾何的な平均 d1: <b>{fmt(d1_geom_mean)}</b>"
+                    f"　→　モデル適用後: <b>{fmt(d1_mean)}</b>"
+                    f"<br>幹が林道に達した点: {model_stats['on_road']} 点 ／ "
+                    f"直接つかめる範囲: {model_stats['grapple']} 点 ／ "
+                    f"伐倒方向が取れなかった点: {model_stats['blocked']} 点"
+                )
+            else:
+                model_note = ""
 
             html_path = os.path.join(
                 tempfile.gettempdir(),
@@ -595,11 +877,16 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 </table>
 <p class="note">
   サンプル点数: {total} 点 ／ d2 未到達: {null_d2} 点
+  {model_note}
   {"<br><b style='color:#c00'>⚠ 全点が土場に到達できませんでした。林道の接続とスナップ許容誤差を確認してください。</b>" if d2_mean is None else ""}
 </p>
 </body>
 </html>""")
 
+            if d1_geom_mean is not None and d1_mean is not None:
+                feedback.pushInfo(
+                    f"d1 geometric={d1_geom_mean:.3f}m -> model={d1_mean:.3f}m"
+                )
             feedback.pushInfo(
                 f"Done. d1_mean={d1_mean:.3f}m, d2_mean={d2_mean:.3f}m, "
                 f"points={total}, d2_null={null_d2}"

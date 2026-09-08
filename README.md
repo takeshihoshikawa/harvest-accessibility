@@ -19,9 +19,10 @@ Two optional inputs change what is measured:
 - Supply **individual tree points** (e.g. from ALS) and they are used as the sample points
   instead of the grid. Extraction distance is a per-tree quantity, so real stem positions beat
   a regular lattice, and stand density is reflected instead of being averaged away.
-- Supply a **DEM** and d1 switches from the standing tree to the felled stem: the tree is felled
-  in a permitted direction and the near end (top or butt) is winched, so d1 becomes the distance
-  from the road to that end. See [Felling model](#felling-model).
+- Supply a **DEM** — or let the algorithm download one — and d1 switches from the standing tree
+  to the felled stem: the tree is felled in a permitted direction and the near end (top or butt)
+  is winched, so d1 becomes the distance from the road to that end.
+  See [Felling model](#felling-model).
 
 ## Requirements
 
@@ -45,6 +46,7 @@ Two optional inputs change what is measured:
 | Grid spacing (m) | Float | 4.0 | Spacing of the sample grid in metres |
 | Network snapping tolerance (m) | Float | 5.0 | Tolerance for snapping start points onto the road network |
 | DEM | Raster | — | Optional. Supplying it enables the felling model |
+| ...or download a DEM for this area | Enum | Do not download | Fetches elevation tiles for the operation area instead of requiring a file |
 | Individual tree points | Vector point | — | Optional. Used as sample points instead of the grid |
 | Tree height field | Field | — | Optional. Per-tree height; falls back to the numeric value below |
 | Barriers | Vector line/polygon | — | Optional. Rivers etc. A stem cannot be felled across one |
@@ -92,10 +94,11 @@ next to the assumptions that produced them.
 Direction choice clamps the bearing to the road into the allowed sector. That is exact for a
 straight road and an approximation for a curved or branching network.
 
-## Fetching a DEM
+## Getting a DEM
 
-**Processing Toolbox → Harvest Accessibility → Fetch DEM from elevation tiles** builds a DEM
-covering an operation area from published elevation tiles.
+The main algorithm can fetch elevation itself: pick a source under **...or download a DEM for
+this area** and leave the DEM layer empty. The result is cached, so re-running while you tune
+parameters does not download the same tiles again.
 
 | Source | Resolution | Coverage |
 |--------|-----------|----------|
@@ -103,13 +106,18 @@ covering an operation area from published elevation tiles.
 | GSI DEM5A | ~4 m | Where surveyed |
 | GSI DEM10B | ~8 m | Nationwide |
 
-Run it in the office, save the GeoTIFF, and feed the file to the main algorithm. It is a
-separate algorithm on purpose: the main algorithm is used in the forest, where there may be no
-network connection.
+**Processing Toolbox → Harvest Accessibility → Fetch DEM from elevation tiles** writes the same
+DEM to a file. Use it when the file itself is what you want: to reuse one DEM across runs or
+projects, to inspect or edit it, or to prepare one for a machine with no network access.
 
-The DEM is reprojected out of web mercator before it is written. This is not cosmetic — slope
+Either way the DEM is reprojected out of web mercator first. This is not cosmetic — slope
 computed on mercator pixels comes out roughly 20% too gentle at Japanese latitudes, and the
 felling model branches on a slope threshold.
+
+At this site the source resolution made little difference to the mean d1 (15.89 m / 15.90 m /
+15.99 m for ~0.5 m / ~4 m / ~8 m), because the smoothing window coarsens the DEM anyway. It
+moved the count of stems reaching the road by about 8%, so it matters per tree more than in
+aggregate.
 
 Tiles are served by 産業技術総合研究所 シームレス標高タイル, carrying 静岡県 VIRTUAL SHIZUOKA
 (CC BY 4.0) and 国土地理院 基盤地図情報数値標高モデル. Credit the source when publishing

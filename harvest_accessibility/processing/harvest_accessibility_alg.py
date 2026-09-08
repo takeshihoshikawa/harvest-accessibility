@@ -7,6 +7,7 @@ from qgis.core import (
     QgsProcessingAlgorithm,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterEnum,
     QgsProcessingParameterField,
     QgsProcessingParameterNumber,
     QgsProcessingParameterBoolean,
@@ -25,7 +26,11 @@ from qgis.core import (
     QgsVectorLayer
 )
 from qgis.PyQt.QtCore import QCoreApplication, QVariant
+from qgis.core import QgsRasterLayer, QgsCoordinateReferenceSystem, \
+    QgsCoordinateTransform, QgsProject, QgsRectangle
 from qgis import processing
+
+from . import tiles
 
 
 def _azimuth(dx, dy):
@@ -88,6 +93,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
     SPLIT_ROADS = "SPLIT_ROADS"
     # Felling model (all optional; absent inputs keep the plain geometric behaviour)
     DEM = "DEM"
+    AUTO_DEM = "AUTO_DEM"
     TREES = "TREES"
     HEIGHT_FIELD = "HEIGHT_FIELD"
     TREE_HEIGHT = "TREE_HEIGHT"
@@ -153,6 +159,16 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             optional=True
         )
         self.addParameter(dem)
+
+        # Fetching is offered right here rather than only as a separate
+        # algorithm: the normal case is office work, and making people run one
+        # algorithm, save a file and point a second one at it buys nothing.
+        self.addParameter(QgsProcessingParameterEnum(
+            self.AUTO_DEM,
+            self.tr("...or download a DEM for this area"),
+            options=[self.tr("Do not download")] + [s[0] for s in tiles.SOURCES],
+            defaultValue=0
+        ))
 
         trees = QgsProcessingParameterFeatureSource(
             self.TREES,
@@ -262,6 +278,34 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         ):
             param.setFlags(param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
             self.addParameter(param)
+
+    def _download_dem(self, poly, crs, source_idx, feedback, margin=60.0):
+        """Fetch a DEM covering the operation area and hand back a raster layer.
+
+        Repeated runs over the same block reuse the file already fetched, so
+        tuning the model does not re-download the same tiles each time.
+        """
+        ext = poly.sourceExtent()
+        ext = QgsRectangle(ext.xMinimum() - margin, ext.yMinimum() - margin,
+                           ext.xMaximum() + margin, ext.yMaximum() + margin)
+        wgs = QgsCoordinateReferenceSystem("EPSG:4326")
+        ll = QgsCoordinateTransform(crs, wgs, QgsProject.instance()) \
+            .transformBoundingBox(ext)
+        try:
+            path = tiles.build_dem(
+                (ll.xMinimum(), ll.yMinimum(), ll.xMaximum(), ll.yMaximum()),
+                source_idx, 0, crs.toWkt(), crs.authid(),
+                log=feedback.pushInfo,
+                progress=feedback.setProgress,
+                cancelled=feedback.isCanceled,
+            )
+        except tiles.TileError as exc:
+            raise QgsProcessingException(str(exc))
+        layer = QgsRasterLayer(path, "downloaded_dem")
+        if not layer.isValid():
+            raise QgsProcessingException(self.tr(
+                "The downloaded DEM could not be opened: {}").format(path))
+        return layer
 
     def _apply_felling_model(self, p1, p2_geom_only, parameters, context, feedback,
                              _reg, dem_layer, barriers_source, height_field,
@@ -455,6 +499,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
         # Felling model inputs.  Each feature turns itself on by being supplied.
         dem_layer = self.parameterAsRasterLayer(parameters, self.DEM, context)
+        auto_dem = self.parameterAsEnum(parameters, self.AUTO_DEM, context)
         trees_source = self.parameterAsSource(parameters, self.TREES, context)
         height_field = self.parameterAsString(parameters, self.HEIGHT_FIELD, context)
         barriers_source = self.parameterAsSource(parameters, self.BARRIERS, context)
@@ -498,6 +543,14 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 "Landing layer CRS ({}) differs from polygon CRS ({}). "
                 "Reproject all layers to the same CRS."
             ).format(landing_crs.authid(), crs.authid()))
+
+        if dem_layer is None and auto_dem > 0:
+            dem_layer = self._download_dem(
+                poly, crs, auto_dem - 1, feedback)
+        elif dem_layer is not None and auto_dem > 0:
+            feedback.pushInfo(self.tr(
+                "A DEM layer was given, so the download option is ignored."
+            ))
 
         try:
             # Helper: register a memory layer in the context's temporary store so it can be

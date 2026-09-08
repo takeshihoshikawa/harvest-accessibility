@@ -239,7 +239,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 self.FLAT_SLOPE,
                 self.tr("Slope at or below which any direction is allowed (deg)"),
                 QgsProcessingParameterNumber.Double,
-                defaultValue=15.0, minValue=0.0, maxValue=90.0
+                defaultValue=10.0, minValue=0.0, maxValue=90.0
             ),
             QgsProcessingParameterNumber(
                 self.GRAPPLE_REACH,

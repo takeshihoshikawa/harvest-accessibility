@@ -68,6 +68,16 @@ Advanced parameters:
 | Output | Description |
 |--------|-------------|
 | Result report (HTML) | Mean d1 and d2, sample point count, unreachable point count |
+| Sample points with distances | One point per tree or grid node: `d1`, `d2`, `d_total`, the landing it feeds, and — with the felling model — the felling azimuth and stem reach |
+| Hauling lines | From the end that gets grabbed to the point on the road. Only where something is actually winched |
+| Felled stems | Butt to top, as felled. Needs the felling model |
+
+The map layers are optional — leave a field empty and that layer is not produced. They are
+styled as they load: distances are graduated, and zero gets its own class, because with a third
+of the points at zero folding them into the ramp flattens everything else.
+
+On a grid the stems are hypothetical trees at each node, and at 4 m spacing 20 m stems overlap
+into a solid mass. They are meant for real tree points.
 
 Enable **Debug mode** (Advanced parameters) to also load intermediate layers into the project:
 `debug_p1_grid`, `debug_p2_road_snap`, `debug_routes`, `debug_summary`

@@ -1,35 +1,75 @@
-name: Release
+name: Mirror release
 
+# タグを打つと、公開してよいファイルだけを公開ミラーへスナップショットとして push する。
+# zip のビルドと Release の作成はミラー側の release.yml が担当する。
 on:
   push:
     tags:
       - 'v*'
 
 jobs:
-  release:
+  mirror:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Build zip
+      - name: Set up deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.MIRROR_DEPLOY_KEY }}
         run: |
-          PLUGIN_DIR="harvest_accessibility"
-          ZIP_NAME="harvest_accessibility_v${{ steps.version.outputs.VERSION }}.zip"
-          zip -r "$ZIP_NAME" "$PLUGIN_DIR" \
-            --exclude "*/__pycache__/*" \
-            --exclude "*/.DS_Store"
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.ZIP_NAME }}
-          body_path: CHANGELOG.md
+      - name: Export public tree
+        run: ci/export-public.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/public"
+
+      - name: Push snapshot to mirror
+        env:
+          MIRROR: git@github.com:takeshihoshikawa/harvest-accessibility-qgis.git
+          VERSION: ${{ github.ref_name }}
+        run: |
+          git clone "$MIRROR" "$RUNNER_TEMP/mirror"
+          cd "$RUNNER_TEMP/mirror"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 同じタグが既にミラーにあるなら、何かを push する前に止める。
+          # 途中まで進んで「コミットはあるが Release が無い」状態を作らないため。
+          # 再実行するときはミラー側のタグとコミットを手で消してから。
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "ミラーに $VERSION が既にある" >&2
+            exit 1
+          fi
+
+          # 初回は空リポなので origin/main が無い。その場合は未出生の main から始める。
+          if git rev-parse --verify -q origin/main >/dev/null; then
+            git checkout -q -B main origin/main
+          else
+            git checkout -q -B main
+          fi
+
+          # 追跡・未追跡とも全部落としてから展開する。git rm だけだと、
+          # 作業リポで消したファイルは消えるが、ミラーへ直接置かれた未追跡ファイルが
+          # 残ってスナップショットに紛れ込む。
+          if git rev-parse --verify -q HEAD >/dev/null; then
+            git rm -rq --ignore-unmatch .
+          fi
+          git clean -xdfq
+          cp -R "$RUNNER_TEMP/public/." .
+
+          git add -A
+          # 内容が前回と同じでもタグ1つにつきコミット1つを保つ。
+          git commit --allow-empty -m "$VERSION"
+          git tag "$VERSION"
+
+          # --atomic でブランチとタグを一括で送る。片方だけ通ると
+          # ミラーにコミットだけ残って Release が出ない状態になるため。
+          # force push はしない。毎回ミラーの現在の先端から積むので、誰かが
+          # ミラーへ直接コミットしていてもその上に載る（コミット自体は履歴に
+          # 残るが、中身はこのスナップショットで上書きされて消える）。
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$VERSION"

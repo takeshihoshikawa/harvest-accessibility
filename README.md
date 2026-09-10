@@ -152,6 +152,15 @@ Suggested parameters: grid spacing = 4 m, snapping tolerance = 5 m.
 - The algorithm iterates over all landing points and assigns each sample point the minimum d2,
   so multiple landings are handled correctly.
 
+## Contributing
+
+This repository is a read-only snapshot published from a private development repository.
+Each release is exported as a single commit, so it carries no development history and
+**pull requests cannot be merged** — any commit pushed here is replaced by the next release.
+
+Bug reports and feature requests are very welcome: please open an
+[issue](https://github.com/takeshihoshikawa/harvest-accessibility-qgis/issues).
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE)

@@ -69,6 +69,18 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
         <translation>デバッグモード（中間レイヤーをプロジェクトに追加）</translation>
     </message>
     <message>
+        <source>Maximum sample points (0 = no limit)</source>
+        <translation>サンプル点数の上限（0 で無制限）</translation>
+    </message>
+    <message>
+        <source>    -&gt; {n} sample points (estimated peak memory {gb:.1f} GB).</source>
+        <translation>    -&gt; サンプル点 {n} 点（推定ピークメモリ {gb:.1f} GB）。</translation>
+    </message>
+    <message>
+        <source>{n} sample points exceeds the limit of {lim} (estimated memory {gb:.1f} GB). Use a coarser grid spacing, split the operation area into parts, or raise 'Maximum sample points' in the advanced parameters.</source>
+        <translation>サンプル点が {n} 点あり、上限の {lim} 点を超えています（推定メモリ {gb:.1f} GB）。グリッド間隔を粗くするか、作業区域を分割するか、詳細パラメータの「サンプル点数の上限」を引き上げてください。</translation>
+    </message>
+    <message>
         <source>Invalid input layers.</source>
         <translation>入力レイヤーが無効です。</translation>
     </message>

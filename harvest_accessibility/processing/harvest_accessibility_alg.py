@@ -165,6 +165,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
     GRAPPLE_REACH = "GRAPPLE_REACH"
     ASPECT_SMOOTH = "ASPECT_SMOOTH"
     ROAD_CANDIDATES = "ROAD_CANDIDATES"
+    MAX_POINTS = "MAX_POINTS"
 
     def tr(self, string):
         return QCoreApplication.translate("HarvestAccessibilityAlg", string)
@@ -320,6 +321,22 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             debug_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced
         )
         self.addParameter(debug_param)
+
+        # A resource guard, not a method constant.  Memory grows at roughly
+        # 13 KB per sample point, so a large area at a fine spacing can exhaust
+        # a field laptop -- and a grid-spacing floor cannot prevent that, since
+        # the count follows the area as well.  Stopping before any work beats
+        # being killed by the OS halfway through.  0 disables the check.
+        max_points_param = QgsProcessingParameterNumber(
+            self.MAX_POINTS,
+            self.tr("Maximum sample points (0 = no limit)"),
+            QgsProcessingParameterNumber.Integer,
+            defaultValue=200000, minValue=0
+        )
+        max_points_param.setFlags(
+            max_points_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced
+        )
+        self.addParameter(max_points_param)
 
         # Calibration values for the felling model.  These are method constants
         # rather than per-site inputs, so they live behind the advanced flag --
@@ -747,6 +764,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
         grapple_reach = float(self.parameterAsDouble(parameters, self.GRAPPLE_REACH, context))
         aspect_smooth = float(self.parameterAsDouble(parameters, self.ASPECT_SMOOTH, context))
         road_candidates = int(self.parameterAsInt(parameters, self.ROAD_CANDIDATES, context))
+        max_points = int(self.parameterAsInt(parameters, self.MAX_POINTS, context))
 
         if poly is None or roads is None or landing is None:
             raise QgsProcessingException(self.tr("Invalid input layers."))
@@ -845,6 +863,23 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     "With a grid, try a smaller spacing; with tree points, check "
                     "that they overlap the operation area."
                 ))
+
+            # 0.42 GB is QGIS itself; the rest was measured at about 13 KB per
+            # sample point (2026-09-10, sample data, felling model off).  The
+            # estimate is reported either way so the cost is visible before the
+            # long part of the run, not only when the limit is hit.
+            n_points = p1.featureCount()
+            est_gb = 0.42 + n_points * 13e-6
+            feedback.pushInfo(self.tr(
+                "    -> {n} sample points (estimated peak memory {gb:.1f} GB)."
+            ).format(n=n_points, gb=est_gb))
+            if max_points > 0 and n_points > max_points:
+                raise QgsProcessingException(self.tr(
+                    "{n} sample points exceeds the limit of {lim} (estimated "
+                    "memory {gb:.1f} GB). Use a coarser grid spacing, split the "
+                    "operation area into parts, or raise 'Maximum sample points' "
+                    "in the advanced parameters."
+                ).format(n=n_points, lim=max_points, gb=est_gb))
 
             p1 = _reg(processing.run(
                 "native:fieldcalculator",

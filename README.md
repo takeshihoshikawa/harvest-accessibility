@@ -62,6 +62,7 @@ Advanced parameters:
 | Slope/aspect smoothing window (m) | Float | 5.0 | Cell size the DEM is resampled to before slope and aspect |
 | Candidate roads per sample point | Integer | 10 | How many nearby roads are considered |
 | Split roads at intersections | Boolean | True | Split road lines at intersections before routing for better connectivity |
+| Maximum sample points | Integer | 200000 | Stops before processing if the sample exceeds this, rather than running out of memory part way. Memory is roughly 0.42 GB plus 13 KB per sample point. 0 disables the check |
 
 ## Outputs
 

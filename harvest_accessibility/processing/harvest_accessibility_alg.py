@@ -966,10 +966,21 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
             else:
                 roads_source = parameters[self.ROADS]
 
-            routes_id_list = []
             authid = crs.authid()
 
+            # Each landing is routed separately and folded into the running best
+            # straight away.  Keeping every landing's route layer and merging
+            # them at the end put (points x landings) route lines in memory at
+            # once and then sorted and de-duplicated that whole pile -- with a
+            # dense grid it was both the memory peak and a large part of the
+            # runtime.  The route geometry is never an output: only d2 and which
+            # landing won are used downstream, so only those are kept.
+            best = {}                # tree_id -> (d2, landing_fid)
+            debug_route_layers = []
             skipped_landings = []
+            n_landings_routed = 0
+            warned_no_cost = False
+
             for lf in landing_layer.getFeatures():
                 if feedback.isCanceled():
                     raise QgsProcessingException(self.tr("Processing cancelled by user."))
@@ -996,23 +1007,46 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     },
                     context=context, feedback=feedback
                 )
+                r = out["OUTPUT"]
+                n_landings_routed += 1
 
-                r = _reg(out["OUTPUT"])
-                r = _reg(processing.run(
-                    "native:fieldcalculator",
-                    {
-                        "INPUT": r.id(),
-                        "FIELD_NAME": "landing_fid",
-                        "FIELD_TYPE": 1,  # int
-                        "FIELD_LENGTH": 20,
-                        "FIELD_PRECISION": 0,
-                        "FORMULA": str(lf.id()),
-                        "OUTPUT": "memory:"
-                    },
-                    context=context, feedback=feedback
-                )["OUTPUT"])
+                if r.fields().indexFromName("tree_id") == -1:
+                    raise QgsProcessingException(self.tr(
+                        "Routing output has no 'tree_id' field. Ensure p2 has 'tree_id' attribute."
+                    ))
+                has_cost = r.fields().indexFromName("cost") != -1
+                if not has_cost and not warned_no_cost:
+                    feedback.pushInfo(self.tr(
+                        "Note: routing output has no 'cost' field; using geometry length for d2."
+                    ))
+                    warned_no_cost = True
 
-                routes_id_list.append(r.id())
+                for f in r.getFeatures():
+                    d2 = f["cost"] if has_cost else f.geometry().length()
+                    if d2 is None:
+                        continue
+                    d2 = float(d2)
+                    tid = f["tree_id"]
+                    cur = best.get(tid)
+                    if cur is None or d2 < cur[0]:
+                        best[tid] = (d2, lf.id())
+
+                if debug:
+                    # Only debug mode needs the route geometry, so only debug
+                    # pays for keeping it.
+                    debug_route_layers.append(_reg(processing.run(
+                        "native:fieldcalculator",
+                        {
+                            "INPUT": _reg(r).id(),
+                            "FIELD_NAME": "landing_fid",
+                            "FIELD_TYPE": 1,  # int
+                            "FIELD_LENGTH": 20,
+                            "FIELD_PRECISION": 0,
+                            "FORMULA": str(lf.id()),
+                            "OUTPUT": "memory:"
+                        },
+                        context=context, feedback=feedback
+                    )["OUTPUT"]).id())
 
             if skipped_landings:
                 feedback.reportError(self.tr(
@@ -1023,48 +1057,12 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                          ", ".join(str(i) for i in skipped_landings)),
                     fatalError=False)
 
-            if not routes_id_list:
+            if n_landings_routed == 0:
                 raise QgsProcessingException(self.tr(
                     "No valid landing points were found (all geometries empty?)."
                 ))
 
-            merged_routes = _reg(processing.run(
-                "native:mergevectorlayers",
-                {"LAYERS": routes_id_list, "CRS": crs, "OUTPUT": "memory:"},
-                context=context, feedback=feedback
-            )["OUTPUT"])
-
-            cost_field = "cost" if merged_routes.fields().indexFromName("cost") != -1 else None
-            if cost_field is None:
-                feedback.pushInfo(self.tr(
-                    "Note: routing output has no 'cost' field; using geometry length for d2."
-                ))
-            routes = _reg(processing.run(
-                "native:fieldcalculator",
-                {
-                    "INPUT": merged_routes.id(),
-                    "FIELD_NAME": "d2",
-                    "FIELD_TYPE": 0,
-                    "FIELD_LENGTH": 20,
-                    "FIELD_PRECISION": 3,
-                    "FORMULA": f"\"{cost_field}\"" if cost_field else "$length",
-                    "OUTPUT": "memory:"
-                },
-                context=context, feedback=feedback
-            )["OUTPUT"])
-
-            if routes.fields().indexFromName("tree_id") == -1:
-                raise QgsProcessingException(self.tr(
-                    "Routing output has no 'tree_id' field. Ensure p2 has 'tree_id' attribute."
-                ))
-
-            routes = _reg(processing.run(
-                "native:extractbyexpression",
-                {"INPUT": routes.id(), "EXPRESSION": "\"d2\" IS NOT NULL", "OUTPUT": "memory:"},
-                context=context, feedback=feedback
-            )["OUTPUT"])
-
-            if routes.featureCount() == 0:
+            if not best:
                 raise QgsProcessingException(self.tr(
                     "All grid points are unreachable from all landings. "
                     "Check that the road network is connected, "
@@ -1072,27 +1070,26 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     "and the snapping tolerance is sufficient."
                 ))
 
-            # Take the minimum-d2 route per sample point by ordering and then
-            # dropping duplicates: unlike a statistics-by-category minimum this
-            # keeps the winning row whole, so the landing it went to comes with
-            # it.  Without that, "which landing" would exist only in the raw
-            # route layer.
-            routes_sorted = _reg(processing.run(
-                "native:orderbyexpression",
-                {"INPUT": routes.id(), "EXPRESSION": '"d2"', "ASCENDING": True,
-                 "NULLS_FIRST": False, "OUTPUT": "memory:"},
-                context=context, feedback=feedback
-            )["OUTPUT"])
-            best_routes = _reg(processing.run(
-                "native:removeduplicatesbyattribute",
-                {"INPUT": routes_sorted.id(), "FIELDS": ["tree_id"],
-                 "OUTPUT": "memory:"},
-                context=context, feedback=feedback
-            )["OUTPUT"])
+            # What the merged route layer was ever reduced to: one row per tree.
+            # No geometry, so the join below costs a table the size of p2.
+            best_routes = QgsVectorLayer("None", "best_routes", "memory")
+            best_fields = QgsFields()
+            best_fields.append(QgsField("tree_id", QVariant.Int))
+            best_fields.append(QgsField("d2", QVariant.Double))
+            best_fields.append(QgsField("landing_fid", QVariant.Int))
+            best_routes.dataProvider().addAttributes(best_fields.toList())
+            best_routes.updateFields()
+            best_feats = []
+            for tid, (d2, landing_fid) in best.items():
+                bf = QgsFeature(best_routes.fields())
+                bf["tree_id"] = tid
+                bf["d2"] = d2
+                bf["landing_fid"] = landing_fid
+                best_feats.append(bf)
+            best_routes.dataProvider().addFeatures(best_feats)
+            _reg(best_routes)
 
-            copy_fields = ["d2"]
-            if best_routes.fields().indexFromName("landing_fid") != -1:
-                copy_fields.append("landing_fid")
+            copy_fields = ["d2", "landing_fid"]
             p2_with = _reg(processing.run(
                 "native:joinattributestable",
                 {
@@ -1232,11 +1229,17 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                         context=context, feedback=feedback
                     )["OUTPUT"])
 
-                    for layer, name in [
+                    debug_layers = [
                         (p1_dbg,  "debug_p1_grid"),
                         (p2_with, "debug_p2_road_snap"),
-                        (routes,  "debug_routes"),
-                    ]:
+                    ]
+                    if debug_route_layers:
+                        debug_layers.append((_reg(processing.run(
+                            "native:mergevectorlayers",
+                            {"LAYERS": debug_route_layers, "CRS": crs, "OUTPUT": "memory:"},
+                            context=context, feedback=feedback
+                        )["OUTPUT"]), "debug_routes"))
+                    for layer, name in debug_layers:
                         context.addLayerToLoadOnCompletion(
                             layer.id(),
                             QgsProcessingContext.LayerDetails(name, project)
@@ -1247,7 +1250,6 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     summary_fields.append(QgsField("n_d2_null", QVariant.Int))
                     summary_fields.append(QgsField("d1_mean", QVariant.Double))
                     summary_fields.append(QgsField("d2_mean", QVariant.Double))
-                    from qgis.core import QgsVectorLayer, QgsProject
                     summary_layer = QgsVectorLayer("NoGeometry", "debug_summary", "memory")
                     summary_layer.dataProvider().addAttributes(summary_fields.toList())
                     summary_layer.updateFields()

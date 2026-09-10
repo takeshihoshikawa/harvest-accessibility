@@ -34,7 +34,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
 4) HTML結果レポートを出力。
 注意：メートル系投影座標系を使用してください。
 
-詳細設定：デバッグモードを有効にすると中間レイヤーをプロジェクトに追加します。</translation>
+詳細設定：デバッグモードを有効にすると中間レイヤをプロジェクトに追加します。</translation>
     </message>
     <message>
         <source>Operation area polygon</source>
@@ -66,7 +66,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Debug mode (add intermediate layers to project)</source>
-        <translation>デバッグモード（中間レイヤーをプロジェクトに追加）</translation>
+        <translation>デバッグモード（中間レイヤをプロジェクトに追加）</translation>
     </message>
     <message>
         <source>Maximum sample points (0 = no limit)</source>
@@ -90,7 +90,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Invalid input layers.</source>
-        <translation>入力レイヤーが無効です。</translation>
+        <translation>入力レイヤが無効です。</translation>
     </message>
     <message>
         <source>Operation area polygon has no features.</source>
@@ -98,7 +98,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Forest roads layer has no features.</source>
-        <translation>作業道レイヤーにフィーチャがありません。</translation>
+        <translation>作業道レイヤにフィーチャがありません。</translation>
     </message>
     <message>
         <source>Polygon CRS is geographic (degrees). Reproject to a projected CRS in metres.</source>
@@ -110,11 +110,11 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Road layer CRS ({}) differs from polygon CRS ({}). Reproject all layers to the same CRS.</source>
-        <translation>林道レイヤーのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤーを同じCRSに再投影してください。</translation>
+        <translation>林道レイヤのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤを同じCRSに再投影してください。</translation>
     </message>
     <message>
         <source>Landing layer CRS ({}) differs from polygon CRS ({}). Reproject all layers to the same CRS.</source>
-        <translation>土場レイヤーのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤーを同じCRSに再投影してください。</translation>
+        <translation>土場レイヤのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤを同じCRSに再投影してください。</translation>
     </message>
     <message>
         <source>1) Creating grid points (p1)...</source>
@@ -134,7 +134,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Landing layer has no features.</source>
-        <translation>土場レイヤーにフィーチャがありません。</translation>
+        <translation>土場レイヤにフィーチャがありません。</translation>
     </message>
     <message>
         <source>3a) Splitting roads at intersections...</source>
@@ -178,11 +178,162 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Debug: no project context, skipping layer output.</source>
-        <translation>デバッグ：プロジェクトコンテキストがないため、レイヤー出力をスキップします。</translation>
+        <translation>デバッグ：プロジェクトコンテキストがないため、レイヤ出力をスキップします。</translation>
     </message>
     <message>
         <source>Unexpected error during processing: {}</source>
         <translation>処理中に予期しないエラーが発生しました: {}</translation>
+    </message>
+    <message>
+        <source>    -&gt; stem reaches the road: {} / within grapple reach: {} / no felling direction available: {}</source>
+        <translation>    -&gt; 幹が道に届いた: {} 本 / 直接把持の範囲内: {} 本 / 伐倒方向なし: {} 本</translation>
+    </message>
+    <message>
+        <source>...or download a DEM for this area</source>
+        <translation>...またはこの区域の DEM をダウンロード</translation>
+    </message>
+    <message>
+        <source>1) Using supplied tree points as sample points (p1); grid spacing is ignored.</source>
+        <translation>1) 与えられた単木ポイントをサンプル点 (p1) として使います。グリッド間隔は無視されます。</translation>
+    </message>
+    <message>
+        <source>2b) Preparing slope and aspect for the felling model...</source>
+        <translation>2b) 伐倒モデル用に傾斜と斜面方位を準備しています...</translation>
+    </message>
+    <message>
+        <source>A DEM layer was given, so the download option is ignored.</source>
+        <translation>DEM レイヤが指定されているため、ダウンロードの指定は無視されます。</translation>
+    </message>
+    <message>
+        <source>Barriers (rivers etc.; lines or polygons)</source>
+        <translation>障害物（河川など。ラインまたはポリゴン）</translation>
+    </message>
+    <message>
+        <source>DEM (enables the felling model)</source>
+        <translation>DEM（指定すると伐倒モデルが有効になります）</translation>
+    </message>
+    <message>
+        <source>Direct grapple reach from the road (m)</source>
+        <translation>道からの直接把持距離 (m)</translation>
+    </message>
+    <message>
+        <source>Do not download</source>
+        <translation>ダウンロードしない</translation>
+    </message>
+    <message>
+        <source>Felled stems (butt to top)</source>
+        <translation>伐倒した幹（元口から梢まで）</translation>
+    </message>
+    <message>
+        <source>Felled stems need the felling model; supply a DEM (or choose a download source) to get them.</source>
+        <translation>伐倒した幹の出力には伐倒モデルが必要です。DEM を指定するか、ダウンロード元を選んでください。</translation>
+    </message>
+    <message>
+        <source>Felling sector half-angle from downslope (deg)</source>
+        <translation>伐倒可能な扇形の半角（最大傾斜の下方向から、度）</translation>
+    </message>
+    <message>
+        <source>Hauling lines (grabbed end to road)</source>
+        <translation>集材線（つかむ側の端から道まで）</translation>
+    </message>
+    <message>
+        <source>Individual tree points (used as sample points instead of the grid)</source>
+        <translation>単木ポイント（グリッドの代わりにサンプル点として使います）</translation>
+    </message>
+    <message>
+        <source>No sample points fall within the operation polygon. With a grid, try a smaller spacing; with tree points, check that they overlap the operation area.</source>
+        <translation>作業区域ポリゴンの中にサンプル点がありません。グリッドの場合は間隔を小さくしてください。単木ポイントの場合は作業区域と重なっているか確認してください。</translation>
+    </message>
+    <message>
+        <source>Number of candidate roads per sample point</source>
+        <translation>サンプル点ごとの候補林道数</translation>
+    </message>
+    <message>
+        <source>Sample points with distances</source>
+        <translation>距離つきサンプル点</translation>
+    </message>
+    <message>
+        <source>Slope at or below which any direction is allowed (deg)</source>
+        <translation>全方向に倒せるとみなす傾斜の上限（度）</translation>
+    </message>
+    <message>
+        <source>Slope/aspect smoothing window (m)</source>
+        <translation>傾斜・斜面方位の平滑化ウィンドウ (m)</translation>
+    </message>
+    <message>
+        <source>The downloaded DEM could not be opened: {}</source>
+        <translation>ダウンロードした DEM を開けませんでした: {}</translation>
+    </message>
+    <message>
+        <source>Tree height (m), used when no height field is given</source>
+        <translation>樹高 (m)。樹高フィールドが無いときに使います</translation>
+    </message>
+    <message>
+        <source>Tree height field</source>
+        <translation>樹高フィールド</translation>
+    </message>
+    <message>
+        <source>{} sample points were equidistant from more than one road; keeping one shortest line each.</source>
+        <translation>{} 点のサンプル点が複数の林道から等距離でした。それぞれ最短線を1本だけ残します。</translation>
+    </message>
+</context>
+<context>
+    <name>FetchDemAlg</name>
+    <message>
+        <source>DEM</source>
+        <translation>DEM</translation>
+    </message>
+    <message>
+        <source>Downloads published elevation tiles covering an operation area and writes a DEM in the layer's own CRS.
+
+The main algorithm can fetch its own DEM, so use this when you want the file itself: to reuse one DEM across runs, to inspect or edit it, or to prepare one for a machine without network access.
+
+The DEM is reprojected out of web mercator before being written. That is not cosmetic -- slope computed on mercator tiles comes out roughly 20% too gentle at these latitudes.
+
+Sources: 静岡県 VIRTUAL SHIZUOKA / 産業技術総合研究所 シームレス標高タイル (CC BY 4.0). Credit the source when you publish results.</source>
+        <translation>作業区域を覆う公開標高タイルをダウンロードし、レイヤ自身の座標系で DEM を書き出します。
+
+主アルゴリズムも自分で DEM を取得できるので、これはファイルそのものが欲しいときに使います。1つの DEM を複数回の実行で使い回す、中身を確認・編集する、ネットワークの無い機械のために用意する、といった場合です。
+
+書き出す前に Web メルカトルから再投影します。これは見た目の問題ではありません。メルカトルのタイル上で傾斜を計算すると、この緯度ではおよそ 2 割ゆるく出ます。
+
+出典: 静岡県 VIRTUAL SHIZUOKA / 産業技術総合研究所 シームレス標高タイル (CC BY 4.0)。結果を公表するときは出典を明記してください。</translation>
+    </message>
+    <message>
+        <source>Fetch DEM from elevation tiles</source>
+        <translation>標高タイルから DEM を取得</translation>
+    </message>
+    <message>
+        <source>Harvest Accessibility</source>
+        <translation>Harvest Accessibility</translation>
+    </message>
+    <message>
+        <source>Invalid extent layer.</source>
+        <translation>範囲レイヤが無効です。</translation>
+    </message>
+    <message>
+        <source>Margin around the area (m)</source>
+        <translation>区域の外側に取る余白 (m)</translation>
+    </message>
+    <message>
+        <source>Operation area (extent to cover)</source>
+        <translation>作業区域（覆う範囲）</translation>
+    </message>
+    <message>
+        <source>Output resolution (m; 0 = the tile's own resolution)</source>
+        <translation>出力解像度 (m。0 でタイル本来の解像度)</translation>
+    </message>
+    <message>
+        <source>The extent layer is in a geographic CRS. Use a projected CRS in metres so that the margin and output resolution mean metres.</source>
+        <translation>範囲レイヤが地理座標系です。余白と出力解像度がメートルとして意味を持つよう、メートル単位の投影座標系を使ってください。</translation>
+    </message>
+    <message>
+        <source>Tile source</source>
+        <translation>タイルの取得元</translation>
+    </message>
+    <message>
+        <source>Zoom level (0 = use the source maximum)</source>
+        <translation>ズームレベル (0 で取得元の最大値)</translation>
     </message>
 </context>
 </TS>

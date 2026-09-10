@@ -9,14 +9,14 @@
     </message>
     <message>
         <source>Harvest Accessibility</source>
-        <translation>搬出距離</translation>
+        <translation>集材・搬出距離</translation>
     </message>
 </context>
 <context>
     <name>HarvestAccessibilityAlg</name>
     <message>
         <source>Harvest Accessibility</source>
-        <translation>搬出距離</translation>
+        <translation>集材・搬出距離</translation>
     </message>
     <message>
         <source>Inputs: operation polygon, forest road lines (also used as network), landing points (multiple OK).
@@ -29,8 +29,8 @@ NOTE: Use a projected CRS in metres.
 Advanced: enable debug mode to load intermediate layers into the project.</source>
         <translation>入力：作業区域ポリゴン、作業道ライン（ネットワークとしても使用）、土場点（複数可）。
 1) ポリゴン内にグリッド点（p1）を作成
-2) 各グリッド点から最近傍の林道までの直線距離 → d1、道路上の最近傍点 → p2
-3) p2から最近傍土場までの道路ネットワーク最短距離 → d2（未到達の場合はNULL）
+2) 各グリッド点から最近傍の作業道までの直線距離 → d1、作業道上の最近傍点 → p2
+3) p2から最近傍土場までの路網最短距離 → d2（未到達の場合はNULL）
 4) HTML結果レポートを出力。
 注意：メートル系投影座標系を使用してください。
 
@@ -58,7 +58,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Split roads at intersections before routing</source>
-        <translation>ルーティング前に交差点で道路を自動分割</translation>
+        <translation>ルーティング前に交差点で作業道を自動分割</translation>
     </message>
     <message>
         <source>Result report</source>
@@ -110,7 +110,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Road layer CRS ({}) differs from polygon CRS ({}). Reproject all layers to the same CRS.</source>
-        <translation>林道レイヤのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤを同じCRSに再投影してください。</translation>
+        <translation>作業道レイヤのCRS（{}）がポリゴンのCRS（{}）と異なります。全レイヤを同じCRSに再投影してください。</translation>
     </message>
     <message>
         <source>Landing layer CRS ({}) differs from polygon CRS ({}). Reproject all layers to the same CRS.</source>
@@ -126,11 +126,11 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>2) Computing shortest lines to roads (d1) and nearest points (p2)...</source>
-        <translation>2) 道路への最短距離（d1）と最近傍点（p2）を計算中...</translation>
+        <translation>2) 作業道への最短距離（d1）と最近傍点（p2）を計算中...</translation>
     </message>
     <message>
         <source>3) Computing shortest path along road network to nearest landing (d2)...</source>
-        <translation>3) 最近傍土場までの道路ネットワーク最短経路（d2）を計算中...</translation>
+        <translation>3) 最近傍土場までの路網最短経路（d2）を計算中...</translation>
     </message>
     <message>
         <source>Landing layer has no features.</source>
@@ -138,7 +138,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>3a) Splitting roads at intersections...</source>
-        <translation>3a) 交差点で道路を分割中...</translation>
+        <translation>3a) 交差点で作業道を分割中...</translation>
     </message>
     <message>
         <source>    -&gt; {} segments after split.</source>
@@ -162,7 +162,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>All grid points are unreachable from all landings. Check that the road network is connected, landing points are on or near the road, and the snapping tolerance is sufficient.</source>
-        <translation>全グリッド点がすべての土場から到達不能です。道路ネットワークが接続されているか、土場点が道路上または近傍にあるか、スナップ許容誤差が十分かを確認してください。</translation>
+        <translation>全グリッド点がすべての土場から到達不能です。路網が接続されているか、土場点が作業道上または近傍にあるか、スナップ許容誤差が十分かを確認してください。</translation>
     </message>
     <message>
         <source>Unexpected statistics output (no &apos;min&apos; field).</source>
@@ -174,7 +174,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>WARNING: d2_mean is None — no grid points could be routed to any landing. Check that the road network is connected and the snapping tolerance is sufficient.</source>
-        <translation>警告：d2の平均がNoneです — いずれの土場にも到達できるグリッド点がありません。道路ネットワークの接続とスナップ許容誤差を確認してください。</translation>
+        <translation>警告：d2の平均がNoneです — いずれの土場にも到達できるグリッド点がありません。路網の接続とスナップ許容誤差を確認してください。</translation>
     </message>
     <message>
         <source>Debug: no project context, skipping layer output.</source>
@@ -222,7 +222,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Felled stems (butt to top)</source>
-        <translation>伐倒した幹（元口から梢まで）</translation>
+        <translation>伐倒した幹（根元から梢まで）</translation>
     </message>
     <message>
         <source>Felled stems need the felling model; supply a DEM (or choose a download source) to get them.</source>
@@ -234,7 +234,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Hauling lines (grabbed end to road)</source>
-        <translation>集材線（つかむ側の端から道まで）</translation>
+        <translation>集材ライン（つかむ側の端から道まで）</translation>
     </message>
     <message>
         <source>Individual tree points (used as sample points instead of the grid)</source>
@@ -246,7 +246,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>Number of candidate roads per sample point</source>
-        <translation>サンプル点ごとの候補林道数</translation>
+        <translation>サンプル点ごとの候補作業道数</translation>
     </message>
     <message>
         <source>Sample points with distances</source>
@@ -274,7 +274,7 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
     </message>
     <message>
         <source>{} sample points were equidistant from more than one road; keeping one shortest line each.</source>
-        <translation>{} 点のサンプル点が複数の林道から等距離でした。それぞれ最短線を1本だけ残します。</translation>
+        <translation>{} 点のサンプル点が複数の作業道から等距離でした。それぞれ最短線を1本だけ残します。</translation>
     </message>
 </context>
 <context>

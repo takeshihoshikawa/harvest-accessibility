@@ -889,11 +889,12 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
 
                 # Deliberately NOT indexed.  Building a spatial index here
                 # silences the clip's "no spatial index" warning, but it also
-                # changes the order the clip returns points in, and that decides
-                # which road a point equidistant from two of them snaps to.  On
-                # real data it moved 10 more points onto a disconnected segment
-                # (d2_null 54 -> 64).  A cosmetic warning is not worth changing
-                # the answer for; the warning itself is suppressed below.
+                # changes the answer: on a real block it took d2_null from 54 to
+                # 64, with both settings reproducible over three runs.  That
+                # block has no points equidistant from two roads, so the tie
+                # break is not the cause and the mechanism is not understood --
+                # which is itself the reason not to introduce it for a cosmetic
+                # warning.  The warning is suppressed below instead.
                 sample_input = grid_layer.id()
 
             # Both sources get clipped to the operation area the same way.

@@ -6,6 +6,10 @@ on:
   push:
     tags:
       - 'v*'
+  # 空のリポジトリへの初回 push では、ワークフローが登録される前に push イベントが
+  # 処理されるため、タグが届いても発火しない（2026-09-10 に実測）。取りこぼしたときに
+  # 手で流せるようにしておく: gh workflow run Release --repo <mirror> --ref vX.Y.Z
+  workflow_dispatch:
 
 jobs:
   release:

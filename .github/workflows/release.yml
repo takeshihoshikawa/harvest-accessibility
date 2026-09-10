@@ -25,6 +25,17 @@ jobs:
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           test -s ~/.ssh/known_hosts
 
+      # ミラー側にも同じ検査があるが、そちらで落ちるとコミットとタグが landing した後に
+      # なり、Release だけ無い状態が残る。何も push する前にここで止める。
+      - name: Check declared version matches tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DECLARED="$(sed -n 's/^version=//p' harvest_accessibility/metadata.txt)"
+          if [ "$DECLARED" != "$VERSION" ]; then
+            echo "metadata.txt の version=$DECLARED がタグ $GITHUB_REF_NAME と一致しない" >&2
+            exit 1
+          fi
+
       - name: Export public tree
         run: ci/export-public.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/public"
 

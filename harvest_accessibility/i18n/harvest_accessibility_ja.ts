@@ -73,6 +73,14 @@ Advanced: enable debug mode to load intermediate layers into the project.</sourc
         <translation>サンプル点数の上限（0 で無制限）</translation>
     </message>
     <message>
+        <source>{} of {} landing points have no geometry and were ignored (feature ids: {}). Every sample point will be assigned to the remaining landings.</source>
+        <translation>{} 箇所中 {} 箇所の土場にジオメトリが無いため無視しました（フィーチャID: {}）。すべてのサンプル点は残りの土場へ割り当てられます。</translation>
+    </message>
+    <message>
+        <source>{n} of {total} sample points ({pct:.1f}%) could not reach any landing along the road network; their d2 is empty. Check that the road network is connected and that the snapping tolerance is large enough.</source>
+        <translation>{total} 点中 {n} 点（{pct:.1f}%）が路網をたどってどの土場にも到達できませんでした（d2 は空）。路網が連結しているか、スナップ許容誤差が十分かを確認してください。</translation>
+    </message>
+    <message>
         <source>    -&gt; {n} sample points (estimated peak memory {gb:.1f} GB).</source>
         <translation>    -&gt; サンプル点 {n} 点（推定ピークメモリ {gb:.1f} GB）。</translation>
     </message>

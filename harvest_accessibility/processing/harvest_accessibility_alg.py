@@ -86,6 +86,43 @@ def _candidate_directions(target_az, aspect_deg, slope_deg, sector, flat_slope):
     return out
 
 
+class _QuietFeedback(QgsProcessingFeedback):
+    """Feedback for nested algorithms whose per-feature complaints are noise.
+
+    QGIS's routing reports every unreachable start point as an error -- two
+    lines each, and once per landing -- and the attribute join then reports the
+    same points again.  On a real block that is thousands of red lines in the
+    log for a condition the run already summarises, and it makes a successful
+    run look like a failed one.  The facts still reach the user, as one line
+    from the caller.
+
+    Cancellation and progress are forwarded through signals rather than by
+    overriding, because QgsFeedback::isCanceled and setProgress are not virtual.
+    """
+
+    def __init__(self, parent):
+        super().__init__()
+        self._parent = parent
+        self.n_suppressed = 0
+        parent.canceled.connect(self.cancel)
+        self.progressChanged.connect(parent.setProgress)
+
+    def reportError(self, error, fatalError=False):
+        self.n_suppressed += 1
+
+    def pushWarning(self, warning):
+        self.n_suppressed += 1
+
+    def pushInfo(self, info):
+        pass
+
+    def pushDebugInfo(self, info):
+        pass
+
+    def setProgressText(self, text):
+        pass
+
+
 class _D1Styler(QgsProcessingLayerPostProcessorInterface):
     """Graduate the loaded layer by d1, keeping zero as its own class."""
 
@@ -817,6 +854,11 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 context.temporaryLayerStore().addMapLayer(lyr)
                 return lyr
 
+            # Messages from the nested algorithms that say nothing the user can
+            # act on.  One instance for the whole run: it connects to the
+            # parent's cancel signal, and one per call would pile up connections.
+            quiet = _QuietFeedback(feedback)
+
             # 1) Create grid points and clip to polygon
             if trees_source is not None:
                 # Individual tree points stand in for the grid: extraction distance
@@ -830,7 +872,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                 sample_input = parameters[self.TREES]
             else:
                 feedback.pushInfo(self.tr("1) Creating grid points (p1)..."))
-                sample_input = _reg(processing.run(
+                grid_layer = _reg(processing.run(
                 "native:creategrid",
                     {
                         "TYPE": 0,  # point
@@ -843,9 +885,22 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                         "OUTPUT": "memory:"
                     },
                     context=context, feedback=feedback
-                )["OUTPUT"]).id()
+                )["OUTPUT"])
+
+                # Deliberately NOT indexed.  Building a spatial index here
+                # silences the clip's "no spatial index" warning, but it also
+                # changes the order the clip returns points in, and that decides
+                # which road a point equidistant from two of them snaps to.  On
+                # real data it moved 10 more points onto a disconnected segment
+                # (d2_null 54 -> 64).  A cosmetic warning is not worth changing
+                # the answer for; the warning itself is suppressed below.
+                sample_input = grid_layer.id()
 
             # Both sources get clipped to the operation area the same way.
+            # Quiet: the only thing this step says is that the grid has no
+            # spatial index and performance "will be severely degraded", which
+            # is neither true at this scale nor actionable.  The feature count
+            # is checked immediately below, so a real failure still surfaces.
             p1 = _reg(processing.run(
                 "native:extractbylocation",
                 {
@@ -854,7 +909,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     "INTERSECT": parameters[self.POLY],
                     "OUTPUT": "memory:"
                 },
-                context=context, feedback=feedback
+                context=context, feedback=quiet
             )["OUTPUT"])
 
             if p1.featureCount() == 0:
@@ -1040,7 +1095,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                         "OUTPUT": "memory:",
                         "OUTPUT_NON_ROUTABLE": "memory:"
                     },
-                    context=context, feedback=feedback
+                    context=context, feedback=quiet
                 )
                 r = out["OUTPUT"]
                 n_landings_routed += 1
@@ -1084,13 +1139,14 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     )["OUTPUT"]).id())
 
             if skipped_landings:
-                feedback.reportError(self.tr(
-                    "WARNING: {} of {} landing points have no geometry and were "
-                    "ignored (feature ids: {}). Every sample point will be assigned "
-                    "to the remaining landings."
+                # A warning, not an error: the run is valid, but the answer is
+                # wrong in a way that looks right, so it must stay visible.
+                feedback.pushWarning(self.tr(
+                    "{} of {} landing points have no geometry and were ignored "
+                    "(feature ids: {}). Every sample point will be assigned to the "
+                    "remaining landings."
                 ).format(len(skipped_landings), landing_layer.featureCount(),
-                         ", ".join(str(i) for i in skipped_landings)),
-                    fatalError=False)
+                         ", ".join(str(i) for i in skipped_landings)))
 
             if n_landings_routed == 0:
                 raise QgsProcessingException(self.tr(
@@ -1104,6 +1160,19 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     "landing points are on or near the road, "
                     "and the snapping tolerance is sufficient."
                 ))
+
+            # The per-point routing errors are suppressed above, so state the
+            # same fact once, with the scale of it.
+            n_samples = p2.featureCount()
+            n_unreachable = n_samples - len(best)
+            if n_unreachable > 0:
+                feedback.pushWarning(self.tr(
+                    "{n} of {total} sample points ({pct:.1f}%) could not reach any "
+                    "landing along the road network; their d2 is empty. Check that "
+                    "the road network is connected and that the snapping tolerance "
+                    "is large enough."
+                ).format(n=n_unreachable, total=n_samples,
+                         pct=100.0 * n_unreachable / n_samples))
 
             # What the merged route layer was ever reduced to: one row per tree.
             # No geometry, so the join below costs a table the size of p2.
@@ -1138,7 +1207,7 @@ class HarvestAccessibilityAlg(QgsProcessingAlgorithm):
                     "PREFIX": "",
                     "OUTPUT": "memory:"
                 },
-                context=context, feedback=feedback
+                context=context, feedback=quiet
             )["OUTPUT"])
 
             layer_outputs = self._write_result_layers(

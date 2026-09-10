@@ -14,7 +14,9 @@ while IFS= read -r line; do
 done < "$allowlist"
 
 files=()
-while IFS= read -r f; do
+# -z で NUL 区切りにする。既定では非 ASCII を含むパスが "..\346.." の形に
+# 引用されて出るため、接頭辞の照合に失敗してそのファイルが黙って公開から漏れる。
+while IFS= read -r -d '' f; do
   for r in "${rules[@]}"; do
     if [[ "$r" == */ ]]; then
       [[ "$f" == "$r"* ]] && { files+=("$f"); break; }
@@ -22,7 +24,7 @@ while IFS= read -r f; do
       [[ "$f" == "$r" ]] && { files+=("$f"); break; }
     fi
   done
-done < <(git ls-tree -r --name-only "$ref")
+done < <(git ls-tree -r -z --name-only "$ref")
 
 if [[ ${#files[@]} -eq 0 ]]; then
   echo "公開対象が1件も無い。許可リストと ref を確認する: $ref" >&2
@@ -30,7 +32,11 @@ if [[ ${#files[@]} -eq 0 ]]; then
 fi
 
 mkdir -p "$dest"
-git archive "$ref" -- "${files[@]}" | tar -x -C "$dest"
+# :(literal) を付けて、ファイル名に含まれる [ ] * を git にグロブとして
+# 解釈させない。解釈されると意図しないファイルまで書き出されうる。
+pathspecs=()
+for f in "${files[@]}"; do pathspecs+=(":(literal)$f"); done
+git archive "$ref" -- "${pathspecs[@]}" | tar -x -C "$dest"
 
 # ミラーは自分に打たれたタグで Actions を走らせて Release を作るので、
 # そのワークフローだけは名前を変えて渡す。作業リポ側では .github/ の下に
@@ -39,11 +45,13 @@ mkdir -p "$dest/.github/workflows"
 git show "$ref:ci/mirror-release.yml" > "$dest/.github/workflows/release.yml"
 
 # 保険。許可リストを書き換えたときに気づけるようにする。
-for denied in project-status.yaml CLAUDE.md .claude; do
-  if [[ -e "$dest/$denied" ]]; then
-    echo "公開してはいけない $denied が書き出しに含まれている" >&2
-    exit 1
-  fi
-done
+# 許可はディレクトリ接頭辞で効くので、harvest_accessibility/CLAUDE.md のように
+# 配下へ置かれたものも混入しうる。トップだけでなく全階層を見る。
+found=0
+while IFS= read -r hit; do
+  echo "公開してはいけないファイルが書き出しに含まれている: ${hit#"$dest"/}" >&2
+  found=1
+done < <(find "$dest" \( -name CLAUDE.md -o -name project-status.yaml -o -name .claude \))
+[[ $found -eq 0 ]] || exit 1
 
 printf '%s\n' "${files[@]}"
